@@ -1,0 +1,13 @@
+# Lokale verktøy, mellomfiler og personlige innstillinger
+.cache/
+tmp/
+node_modules/
+dist/
+.venv/
+__pycache__/
+.env
+.env.*
+!.env.example
+_bmad/config.user.toml
+_bmad/custom/*.user.toml
+_bmad/**/config.user.yaml

@@ -1,0 +1,196 @@
+<!DOCTYPE html><html lang="nb"><head><meta charset="utf-8"><title>UX-validering – Digital kjørevurdering</title><style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --border: #e7e5e4;
+    --text: #1c1917;
+    --muted: #78716c;
+
+    --verdict-strong: #16a34a;
+    --verdict-adequate: #65a30d;
+    --verdict-thin: #d97706;
+    --verdict-broken: #dc2626;
+
+    --sev-low: #64748b;
+    --sev-medium: #ca8a04;
+    --sev-high: #ea580c;
+    --sev-critical: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header.report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .title h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .title .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .synthesis {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+    font-size: 15.5px;
+  }
+  .synthesis p { margin: 0 0 10px; }
+  .synthesis p:last-child { margin-bottom: 0; }
+
+  .dimension-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .dim-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .dim-card .dim-name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .dim-card .dim-verdict { font-size: 14px; font-weight: 600; }
+
+  section.dimension, section.reviewer-section { margin-bottom: 14px; }
+  section.dimension details, section.reviewer-section details {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  section summary {
+    padding: 14px 20px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  section summary::-webkit-details-marker { display: none; }
+  section summary::before {
+    content: "▸";
+    display: inline-block;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  section details[open] summary::before { transform: rotate(90deg); }
+  section summary h2 {
+    display: inline;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    flex: 1;
+  }
+  .verdict-pill {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: white;
+  }
+  .verdict-strong { background: var(--verdict-strong); }
+  .verdict-adequate { background: var(--verdict-adequate); }
+  .verdict-thin { background: var(--verdict-thin); }
+  .verdict-broken { background: var(--verdict-broken); }
+
+  .dim-body { padding: 4px 20px 18px; }
+  .dim-judgment { color: var(--text); font-size: 14.5px; }
+  .dim-judgment p { margin: 0 0 10px; }
+
+  .findings-list { padding: 0 20px 4px; }
+  article.finding {
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+  }
+  article.finding:first-child { border-top: none; }
+  article.finding header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .badge-sev-low { background: rgba(100, 116, 139, 0.12); color: var(--sev-low); }
+  .badge-sev-medium { background: rgba(202, 138, 4, 0.14); color: var(--sev-medium); }
+  .badge-sev-high { background: rgba(234, 88, 12, 0.14); color: var(--sev-high); }
+  .badge-sev-critical { background: rgba(220, 38, 38, 0.14); color: var(--sev-critical); }
+  .finding-title { margin: 0; font-size: 15px; font-weight: 500; flex: 1; min-width: 200px; }
+  .finding-location { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+  .finding-note, .finding-fix { margin-top: 6px; font-size: 14px; }
+  .finding-fix strong { color: var(--muted); font-weight: 500; }
+
+  .reviewer-source {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  .mechanical {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 24px;
+    font-size: 14px;
+  }
+  .mechanical h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mechanical ul { margin: 0; padding-left: 20px; }
+  .mechanical li { margin-bottom: 4px; color: var(--text); }
+
+  footer.report-footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  footer .meta { display: flex; gap: 24px; flex-wrap: wrap; }
+</style></head><body><aside style="padding:24px;background:#F1E2CE;color:#333"><strong>Sluttstatus 29.10.2026:</strong> Hele UX-oppsettet og alle hjelpetekster er godkjent. UX-T1 er avklart; kjøretrening håndteres utenfor V1. Rapportinnholdet nedenfor er historisk. <a href="finalization-report.md">Se sluttkontrollen</a>.</aside><div class="container"><header class="report-header"><div class="title"><h1>Digital kjørevurdering — UX-validering</h1><div class="subtitle">DESIGN.md + EXPERIENCE.md · status draft</div></div></header><div class="synthesis"><p><strong>Siste arbeidsstatus:</strong> A1 er avklart: alle angitte øktopplysninger er obligatoriske; begge roller kan fylle HH:mm-tider, og fadder fullfører mangler før dagslåsing. Fadderbytte er tillatt underveis. Hjelp er omskrevet til korte felles prosatekster. Fadderdel, egenevaluering, avslutning og PDF-oppsett er laget og visuelt kontrollert; de nye komposisjonene og fagtekstene venter på prosjekteiers gjennomgang. <a href="review-index.html">Samlet gjennomgang</a>.</p><p><strong>Oppdatert status:</strong> Prosjekteier har godkjent skissens uttrykk som V1-standard. Font, fargebruk, avstander, former og komponentverdier er løftet inn i DESIGN.md. Kontroll av 215 tokenstier fant ingen uløste referanser; valgte tekstpar har kontrast 4,87:1–10,11:1. Presentasjonsrammer er ikke produktkrav. Dette er dokument- og fargekontroll, ikke full apptesting eller ny full review. UX er fortsatt draft. Før ferdigstilling gjenstår A1-feltregler, faglig kontroll av 22 hjelpetekster, valg av øvrig skjerm-/PDF-dekning og sluttpolering. Tekniske lagringsvalg og testmatrise overleveres eksplisitt til arkitektur.</p><p><strong>Seneste avklaring:</strong> R2 er avklart: Egenevaluering låses med sjåførens dagsbekreftelse, konklusjon med periodens avslutning. Ved sen utvidelse beholdes tidligere egenevaluering låst og ny tilbys på ny siste dag. Ved ett-dagsløp får sjåføren én felles, frivillig egenevaluering som dekker den eneste dagen. Den tilbys etter avkrysning, kan hoppes over og låses med sjåførens egen dagsbekreftelse. Det opprettes ikke separate første- og sistedagsevalueringer for samme dag.</p><p>Utkastet gjengir hovedbeslutningene godt: én førvurdering, daglig relevans for begge roller, fadders arbeid gjennom dagen, planlagt siste dag, frivillig egenevaluering og separat sluttavslutning. Det er et nyttig grunnlag for neste avklaringsrunde, men ikke klart for ferdigstilling: de validerte låse- og relevansspørsmålene er avklart, mens den visuelle kontrakten fortsatt er ufullstendig. Begge dokumenter beholder status draft.</p><p>Tilgjengelighetskontrollen støtter den valgte trematrisen. Tekstoverløp ved forstørrelse og hjelpenavn er rettet og etterkontrollert. Vedvarende kolonneoverskrifter er valgt, lagt inn og kontrollert i skissen. De ti opprinnelige funnene er nå lukket gjennom rettinger og brukeravklaringer. UX er fortsatt draft. Før ferdigstilling gjenstår A1-feltregler, faglig kontroll av 22 hjelpetekster, valg av øvrig skjerm-/PDF-dekning og sluttpolering. Tekniske lagringsvalg og testmatrise overleveres eksplisitt til arkitektur. Dette er UX- og skissevalidering, ikke sertifisering eller funksjonstest av appen.</p></div><div class="dimension-summary"><div class="dim-card"><div class="dim-name">Flow coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div>
+<div class="dim-card"><div class="dim-name">Token completeness</div><div class="dim-verdict" style="color: var(--verdict-thin)">thin</div></div>
+<div class="dim-card"><div class="dim-name">Component coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div>
+<div class="dim-card"><div class="dim-name">State coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div>
+<div class="dim-card"><div class="dim-name">Visual reference coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div>
+<div class="dim-card"><div class="dim-name">Bloat & overspecification</div><div class="dim-verdict" style="color: var(--verdict-strong)">strong</div></div>
+<div class="dim-card"><div class="dim-name">Inheritance discipline</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div>
+<div class="dim-card"><div class="dim-name">Shape fit</div><div class="dim-verdict" style="color: var(--verdict-strong)">strong</div></div></div><section class="dimension"><details><summary><h2>Flow coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>FR-1–FR-19 dekkes av seks flyter med fiktive deltakere, nummererte steg, avgjørende øyeblikk og feilvei. R1 og R2 er avklart, inkludert låsepunkter, sen utvidelse og ett-dagsløp.</p></div></div><div class="findings-list"><article class="finding"><header><h3 class="finding-title">R1 — Avklart av prosjekteier</h3></header><div class="finding-note">På dag 1 videreføres «Ikke relevant» fra førvurderingen låst med opprinnelig begrunnelse; fadder bekrefter eller avslår i sin del. Fra dag 2 vurderer sjåføren relevansen på nytt hver dag. Nye «Ikke relevant»-valg krever popup-begrunnelse og fadderbehandling. Historiske svar endres ikke. Dokumentavstemming utført; ingen ny full valideringsrunde.</div></article>
+<article class="finding"><header><h3 class="finding-title">R2 — Avklart av prosjekteier</h3></header><div class="finding-note">R2 er avklart: Egenevaluering låses med sjåførens dagsbekreftelse, konklusjon med periodens avslutning. Ved sen utvidelse beholdes tidligere egenevaluering låst og ny tilbys på ny siste dag. Ved ett-dagsløp får sjåføren én felles, frivillig egenevaluering som dekker den eneste dagen. Den tilbys etter avkrysning, kan hoppes over og låses med sjåførens egen dagsbekreftelse. Det opprettes ikke separate første- og sistedagsevalueringer for samme dag.</div></article></div></details></section>
+<section class="dimension"><details open><summary><h2>Token completeness</h2><span class="verdict-pill verdict-thin">thin</span></summary><div class="dim-body"><div class="dim-judgment"><p>Seks profilfarger og alle tokenreferanser er gyldige. Typografi, avstander, former, komponenttokens og semantiske fargepar er ennå ikke bestemt.</p></div></div><div class="findings-list"><article class="finding"><header><h3 class="finding-title">R3 — Godkjent og dokumentert</h3></header><div class="finding-note">Prosjekteier har godkjent skissens uttrykk som V1-standard. Font, fargebruk, avstander, former og komponentverdier er løftet inn i DESIGN.md. Kontroll av 215 tokenstier fant ingen uløste referanser; valgte tekstpar har kontrast 4,87:1–10,11:1. Presentasjonsrammer er ikke produktkrav. Dette er dokument- og fargekontroll, ikke full apptesting eller ny full review.</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Component coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>18 komponenter har samme navn i begge dokumenter. Manglende visuell konkretisering inngår i R3 og telles ikke dobbelt.</p></div></div><div class="findings-list"></div></details></section>
+<section class="dimension"><details><summary><h2>State coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>S1–S10 har tilstander for arbeid, feil og sperrer. Null dager kan nå ikke avsluttes. Identitet/dato/tilhørighet dag 2–5 låses ved sjåførens etterbekreftelse.</p></div></div><div class="findings-list"><article class="finding"><header><h3 class="finding-title">R4 — Avklart av prosjekteier</h3></header><div class="finding-note">På dag 2–5 låses dato, identitet og tilhørighet når sjåføren bekrefter ettervurderingen. Buss, linje og inn-tid fylles ut og redigeres av fadder frem til dagslåsing; sjåføren ser disse som øktopplysninger uten redigering.</div></article>
+<article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">R5 — Avslutning av tomt løp</h3><span class="finding-location">EXPERIENCE.md – etter Component Patterns</span></header><div class="finding-note"><strong>Rettet – dokumentkontrollert.</strong> Kontrakten krever nå minst én registrert og bekreftet dag. En tom liste kan ikke oppfylle avslutningskravet.</div><div class="finding-fix"><strong>Tiltak:</strong> Lukket i UX-teksten; test regelen i implementasjonen.</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Visual reference coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>Originalskjema, logo og foreløpig skjermskisse finnes og er lenket med formål. Mock-dekning for øvrige flater må avklares før sluttføring.</p></div></div><div class="findings-list"></div></details></section>
+<section class="dimension"><details><summary><h2>Bloat & overspecification</h2><span class="verdict-pill verdict-strong">strong</span></summary><div class="dim-body"><div class="dim-judgment"><p>Tabellene dekker ulike behov uten å innføre stakk, ekstra V1-roller eller privat rapport. Foreløpige skisseverdier er tydelig merket.</p></div></div><div class="findings-list"></div></details></section>
+<section class="dimension"><details><summary><h2>Inheritance discipline</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>Kildelenker, kravnavn og komponentnavn samsvarer. PDF-oppfølgingsbeslutning og relevansavstemming er rettet. PRD/addendum må fortsatt avstemmes med nyere vedtak.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">R6 — Oppfølging i PDF</h3><span class="finding-location">EXPERIENCE.md – PDF og innsyn</span></header><div class="finding-note"><strong>Rettet – dokumentkontrollert.</strong> PDF-kontrakten inkluderer nå oppfølgingsbehov, videreføringsbeslutninger, endret planlagt siste dag og registrert dag/avsender.</div><div class="finding-fix"><strong>Tiltak:</strong> Lukket i UX-teksten; kontroller innhold mot lagrede data ved PDF-implementering.</div></article>
+<article class="finding"><header><span class="badge badge-sev-low">low</span><h3 class="finding-title">R7 — Ikke gjenåpne eget valg kontra ren bekreftelse</h3><span class="finding-location">reconcile-prd.md – popupbegrunnelse</span></header><div class="finding-note"><strong>Rettet – dokumentkontrollert.</strong> Kildeavstemmingen skiller nå eget Ikke relevant-valg med popupbegrunnelse fra ren behandling av sjåførens valg.</div><div class="finding-fix"><strong>Tiltak:</strong> Lukket; ikke be brukeren gjenta dette avklarte skillet.</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Shape fit</h2><span class="verdict-pill verdict-strong">strong</span></summary><div class="dim-body"><div class="dim-judgment"><p>Begge dokumenter følger forventet struktur og beholder status draft. Produktspesifikke PDF- og avklaringsseksjoner er relevante.</p></div></div><div class="findings-list"></div></details></section><section class="reviewer-section"><details><summary><h2>Tilgjengelighet</h2><span class="reviewer-source">review-accessibility.md</span></summary><div class="dim-body"><div class="dim-judgment"><p>Funnene gjelder valgt matrise, lesbarhet og betjening. Statisk skisse mangler med hensikt ekte popup-, lagrings- og bekreftelseslogikk; dette er ikke telt som produktfeil. Kun A11Y-2 gjenstår.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">A11Y-1 — Overskrifter ved forstørret tekst</h3><span class="finding-location">.working/key-vurdering.html – column-head</span></header><div class="finding-note"><strong>Rettet og etterkontrollert.</strong> Opprinnelig tekst krysset cellegrenser ved doblet beregnet skriftstørrelse. Etter retting viste samme Edge-kontroll ved 360 px ingen overløp i kontrollerte overskrifter, kriterier, dialog eller knapper; rullebredden var 360 px.</div><div class="finding-fix"><strong>Tiltak:</strong> Lukket for denne statiske skissen. Bredere zoom- og implementasjonstest gjenstår.</div></article>
+<article class="finding"><header><h3 class="finding-title">A11Y-2 — Rettet og kontrollert</h3></header><div class="finding-note">Prosjekteier har valgt at kolonneoverskriftene følger rullingen. Skissen bruker en fast overskriftsrad innen registreringsflaten, med ugjennomsiktig bakgrunn og plass for tastaturfokus. Kontroll i Edge ved 360/390 px og normal/doblet tekst viste fast posisjon ved rulling og ingen tekstoverløp; fokusert sluttfelt var under overskriften. Utskrift bruker vanlig plassering, ingen klippet rulleflate og skjult hjelp. Dette validerer skissen, ikke den fremtidige appen.</div></article>
+<article class="finding"><header><span class="badge badge-sev-low">low</span><h3 class="finding-title">A11Y-3 — Hjelpeknappenes tilgjengelige navn</h3><span class="finding-location">.working/key-vurdering.html – help-trigger</span></header><div class="finding-note"><strong>Rettet og etterkontrollert.</strong> Knappene har nå kategorispesifikke navn. Reviewer har kontrollert rettingen.</div><div class="finding-fix"><strong>Tiltak:</strong> Lukket for navngiving. Åpnet tilstand, kobling til hjelpeinnhold og fokus testes i faktisk implementasjon.</div></article></div></details></section><div class="mechanical"><h3>Mekaniske merknader</h3><ul><li>Seks fargetokens, ti IA-flater, seks flyter og 18 samsvarende komponenter.</li><li>Lokale lenker og tokenreferanser er kontrollert. Ingen Mermaid-diagrammer.</li><li>22 kriterier i to alternative skissebredder er samme skjema vist to ganger.</li><li>A4/A7/A8/A10 og PRD-avstemming gjenstår som dokumenterte oppgaver. Mock-dekning må avklares før ferdigstilling.</li><li>Opprinnelig opptelling: 0 critical, 4 high, 4 medium, 2 low. Alvorlighetsmerket beholdes også på lukkede funn for sporbarhet.</li></ul></div><footer class="report-footer"><div class="meta"><span>DESIGN.md: <a href="DESIGN.md">DESIGN.md</a></span><span>EXPERIENCE.md: <a href="EXPERIENCE.md">EXPERIENCE.md</a></span><span>Rubrikk: <a href="review-rubric.md">review-rubric.md</a></span><span>Tilgjengelighet: <a href="review-accessibility.md">review-accessibility.md</a></span><span>Generert: 2026-10-29T20:43:56+01:00</span></div></footer></div></body></html>

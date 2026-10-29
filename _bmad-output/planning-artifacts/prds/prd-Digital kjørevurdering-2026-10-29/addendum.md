@@ -1,10 +1,10 @@
 # Skjemagrunnlag og føringer til UX og arkitektur
 
-## Primærskjema kontrollert 2026-10-29
+Oppdatert 2026-10-29 etter uttrykkelige UX-beslutninger. Dette er gjeldende detaljgrunnlag til revidert PRD, ikke en ny formell sluttkontroll. Tidligere finalization-report.md gjelder den eldre PRD-baselinen og er bevart uendret. Beslutningshistorikk ligger i [UX-loggen](../../ux-designs/ux-Digital%20kjørevurdering-2026-10-29/.memlog.md).
 
-Begge sider i `docs/Eksempel vurderingsskjema.pdf` er rendret og visuelt lest. Side 1 har 22 kriterier og separate kolonner for sjåfør før kjøring, sjåfør etter kjøring og instruktør/fadder etter kjøring, med OK / Kan bli bedre og kommentar. Side 2 har veiledning og oppsummering første/siste dag med tre styrker, tre utviklingsområder, dato og signaturfelt.
+## Primærskjema og kriterier
 
-Ordlyden nedenfor følger skjemaet med normalisert linjebryting og mellomrom. Virksomhetsnavnet i kriterium 10 er bevisst erstattet med en generisk betegnelse i samsvar med anonymiseringsføringen. Dette er et dokumentert avvik, ikke en ny offisiell ordlyd. Andre kategorier i skjemaets toppfelt er utenfor V1; fadder er valgt kontekst.
+Begge sider i `docs/Eksempel vurderingsskjema.pdf` er rendret og visuelt lest. Side 1 gir 22 kriterier med tydelig adskilte vurderingsperspektiver og kommentarer. Side 2 gir veiledning og første-/sistedagsevaluering med tre styrker, tre utviklingsområder, dato og bekreftelser. Kriterieordlyd nedenfor er uendret fra godkjent addendum, med normaliserte linjebrudd og generisk betegnelse i kriterium 10. Øvrige vurderingskategorier i papirskjemaet er utenfor V1.
 
 | Nr. | Kriterium til demokriteriesettet |
 | --- | --- |
@@ -31,56 +31,71 @@ Ordlyden nedenfor følger skjemaet med normalisert linjebryting og mellomrom. Vi
 | 21 | Fart og plassering før, gjennom og etter sving |
 | 22 | God flyt over fartsdumper |
 
-Kriterienes rettslige eller faglige innhold er ikke validert som del av PRD-arbeidet. Henvisninger er transkribert som skjematekst, ikke gitt som juridisk veiledning.
+Kriterienes rettslige/faglige innhold er transkribert, ikke validert som juridisk veiledning. Hjelpetekster til de 22 punktene forvaltes i den gjeldende UX-hjelpekilden. Hele gjeldende UX-oppsettet er godkjent av prosjekteier.
 
-## Felt og bevisste tilpasninger
+## Registrering og roller
 
-- Sjåfør og instruktør/fadder beholdes som felt med fiktive navn. Ansattnummer representeres av fiktiv deltaker-ID.
-- Dato, buss 1, buss 2, linje, ut kl. og inn kl. finnes i primærskjemaet. Øvingsområde fra det omskrevne demoalternativet er ikke lagt til som kildekrav.
-- Dag 1–8 er avkrysningsvalg i papirskjemaet. Prosjekteiers senere avklaring 2026-10-29 overstyrer dette for V1: normalt tre ordinære dager, kortere ved retur/lånesjåfør, og maksimalt fem dager inkludert oppfølging. Oppfølgingsdager legges til samme løp uten å åpne tidligere dager.
-- «Ikke relevant» er et nytt produktvalg fra prosjekteier, ikke et alternativ i primærskjemaet. Sjåfør begrunner valget før kjøring, og det videreføres etter kjøring. Fadder bekrefter eller avslår i sin del; avslag krever egen kommentar, uten retur eller endring av sjåførens svar.
-- Oppsummeringene bevarer plass til tre styrker og tre utviklingsområder, men er frivillige etter uttrykkelig avklaring fra prosjekteier. Fremtidig obligatorisk status må kunne innføres for nye registreringer.
-- Sjåfør og fadder bekrefter hver sin del med navn. PDF-en skal skille mellom disse bekreftelsene. A6 er avklart; antakelsen om utelatt sjåførbekreftelse er erstattet. Fullt skjema vises til sjåføren når fadderperioden er fullført; fadder har ansvar for tilbakemelding underveis.
-- Opprinnelig mottakertittel i veiledningen erstattes med generisk dokumentmottaker. Direkte levering, automatisk kopi og mottakersystem er ikke valgt.
+- Førvurderingen fylles én gang før første dag. Ved delt enhet gjøres dette ved oppmøte. Egen enhet og tilgang dagen før er fremtidig videreføring.
+- Hver dag registreres sjåfør etter og fadder etter. Første dag har totalt 66 svar inklusive førvurderingen; senere dager har 44 nye svar. Samlet antall er 22 + 44 × registrerte dager.
+- På dag 1 videreføres førvurderingens Ikke relevant låst med opprinnelig begrunnelse. Fadder behandler det videreførte valget én gang. Øvrige dag-1-punkter besvares etter kjøring. Fra dag 2 velges relevans på nytt daglig.
+- Fadder kan registrere og redigere egen del gjennom dagen før sjåfør er ferdig. Sluttbekreftelse krever sjåførens nødvendige bekreftelser, gyldige svar/begrunnelser og lagret innhold.
+- Begge roller begrunner eget Ikke relevant i popup. Fadder bekrefter eller avslår sjåførens valg separat; avslag krever kommentar, men aldri retur eller endring av sjåførens svar. Ren bekreftelse er ikke et nytt selvstendig relevansvalg. Fadder kan selv velge Ikke relevant med egen begrunnelse.
+- Behandling knyttes til det konkrete sjåførsvar og begrunnelse. Endring før sjåførbekreftelse gjør tidligere behandling utdatert; den må utføres på nytt før dagslåsing. Fadders egne utkast beholdes.
+- Sjåfør har ikke fritekstkommentar per kriterium utover relevansbegrunnelse. Fadder kan åpne kommentar på alle 22 punkter uavhengig av valgt svar, også OK og ubesvart. Kommentar er frivillig ellers og påkrevd ved avslag. Avsenderne bevares separat i app og PDF.
 
-## Til UX
+## Begrunnelsesvalidering – A10 avklart
 
-Prioriter ett kriterium med tydelige, adskilte vurderinger fremfor å kopiere papirets brede tabell direkte til mobil. Dette er et designinnspill; skjermutformingen er ikke bestemt.
+Minst to ord og minst ti tegn kreves i begge rollers egne Ikke relevant-begrunnelser og fadders påkrevde avslagskommentar. Trim start/slutt og slå sammen sammenhengende blanktegn til ett mellomrom før telling; tegnantallet inkluderer disse enkle mellomrommene. Et token som bare inneholder tegnsetting teller ikke som ord. «Ingen rygging» og «Ingen billettering» skal godtas. Begge terskler må være oppfylt. Mekanisk lengdekontroll er ikke faglig kvalitetskontroll. Den tidligere antakelsen om tre ord/15 tegn gjelder ikke.
 
-Bekreftelsesdialogene skal skille mellom sjåførens og fadderens del og vise hvem og hvilken dag som bekreftes. Førvurderingen skal bekreftes og låses separat før kjøring, før ettervurderingen åpnes. Ettervurderingen bekreftes etter kjøring. A9 er avklart; ingen bekreftet førvurdering kan endres ved senere registrering. Fadderens endelige låsedialog skal vise hvem og hvilken dag som låses. Mulig tekst: «Du bekrefter vurderingen for [sjåfør], [dato], som [faddernavn]. Dagens vurderinger, kommentarer og opplysninger låses permanent og kan ikke endres etterpå. Kontroller at dere er ferdige før du fortsetter.» Handlinger: «Tilbake til gjennomgang» og «Bekreft og lås dagen».
+## Øktfelt og låsing
 
-Skill mellom «Fortsett med oppfølging» og «Avslutt perioden». Videreføring holder løpet åpent og gir ikke fullt innsyn eller slutt-PDF. Endelig avslutning gir enten utfallet «Godkjent» eller «Fortsatt oppfølgingsbehov»; begge lukker perioden for nye dager og gir fullt innsyn og samlet PDF. Oppfølgingsbehov i et avsluttet løp betyr behov som må håndteres utenfor dette løpet, ikke ufullstendig skjema.
+| Felt/innhold | Redigering og besluttet lås |
+| --- | --- |
+| Sjåføridentitet, dato og kobling til økt/løp dag 1 | Låses med sjåførens førbekreftelse. |
+| Samme identitets-/tilhørighetsfelt dag 2–5 | Låses med sjåførens etterbekreftelse den dagen. |
+| Buss og linjer | Fadder redigerer til dagslåsing; sjåfør leser. Minst én buss kreves; buss 2 bare hvis brukt. |
+| Inn- og ut-tid | Begge roller kan fylle og endre til skiftslutt/dagslåsing. Format HH:mm uten sekunder; fadder fullfører manglende tider. |
+| Gjeldende faddertilknytning | Kan endres underveis, også midt i skift, frem til fadders endelige dagsbekreftelse. Faktisk bekreftende navn bevares historisk. |
+| Sjåførens etterdel og eventuell egenevaluering | Låses med sjåførens etterbekreftelse. |
+| Fadders daglige vurderinger og kommentarer | Låses med fadders dagsbekreftelse når fullføringskravene er oppfylt. |
+| Fadders valgfrie konklusjon | Redigeres til og låses ved endelig avslutning av perioden. |
 
-Varsler om ubesvarte vurderinger må ikke blandes med tomme, frivillige oppsummeringsfelt. «Ikke relevant» og «Kan bli bedre» må ikke fremstilles som OK eller som manglende utfylling.
+A1 er avklart: sjåførnavn, ansattnummer, faddernavn, dato, buss, linjer og begge tider er obligatoriske. Bruk feltnavnet «Ansattnummer» med fiktive verdier. Overordnede profilendringer må aldri flytte låst historikk til ny person, dato eller økt. Gjeldende faddervalg omfattes ikke av sjåføridentitetens før-lås; tidligere bekreftelser bevarer sine faktiske navn.
 
-## Til arkitektur
+Implementeringstolkning: identitet, gjeldende faddernavn og dato kreves ved opprettelse/sjåførbekreftelse; buss, linjer og tider kreves før endelig dagslås. Sjåførens etterbekreftelse skal ikke blokkeres av manglende tider som fadder fullfører ved dagens slutt. Dette konkretiserer rekkefølgen, ikke nye obligatoriske brukerkrav. Manuell registrering fra skiftdata innebærer ingen skiftintegrasjon.
 
-Ingen teknisk stakk er valgt. Vurder stabil identifikasjon av sjåfør, fadderløp, økt og kriterium, samt historisk bevaring av kriteriesett og krav til utfylling. Låsingen må ligge i reglene for lagring og endring, ikke bare i skjermens knapper.
+## Oppfølging og egenevaluering
 
-Ved hver bekreftelse må den berørte delens innhold og bekreftelsesstatus bevares som en samlet tilstand. En feil senere på dagen skal aldri oppheve førvurderingens eksisterende låsing. En feil eller et avbrudd må ikke låse et halvlagret skjema. Gammel redigeringsvisning skal ikke kunne overskrive bekreftet dokumentasjon. Begge bekreftende navn og opplysningen om hvilken del hver person bekrefter må bevares historisk, ikke hentes dynamisk fra en redigerbar profil ved senere PDF-generering.
+Normalt tre dager, eventuelt kortere ved retur/lånesjåfør, maksimalt fem totalt. Én økt per dato. Fadders daglige del har ja/nei om behov for flere dager. Bare ved ja vises antall ekstra dager eller utvidet kjøretrening før fadderkjøring fortsetter. Planen kan endres underveis før sjåførens etterdel er fullført. Ekstra dager holdes innen totalt fem registrerte dager. I V1 velger fadder ny planlagt siste dag; fremtidig ansvar hos opplærings-/fagansvarlig innføres ikke som ny V1-rolle.
 
-Velg hvor utkast lagres og beskriv konkret hva som virker under nettbrudd. PRD-en stiller krav til utfall, men lover ikke full offlinebruk. Vurder mekanismer for gjenåpning, tydelig lagringsstatus og gjentatt forsøk uten duplisering.
+Sjåførens egenevaluering tilbys etter avkrysning første og planlagt siste dag, med tre styrker/tre utviklingsområder, og kan hoppes over. Den låses med egen dagsbekreftelse. Ett-dagsløp har ett felles sett, ikke to. Ved sen utvidelse beholdes bekreftet egenevaluering på sin opprinnelige dag og ny frivillig evaluering tilbys på ny siste dag. Fadder har egen valgfri konklusjon med fullt sjåførinnsyn etter avslutning. Den er ikke den separate, utsatte fagrapporten. Avslutningsflaten samler fritekst først og deretter obligatorisk «Godkjent» / «Oppfølgingsbehov» rett under felles overskrift «Konklusjon». Ordet «utfall» fjernes fra grensesnittet.
 
-Fremtidig endring fra frivillig til obligatorisk oppsummering må kunne uttrykkes uten at alle skjermbilder må bygges om. V1 trenger ingen administrasjonsportal for regelendringen. Historiske bekreftelser må beholde reglene som gjaldt da de ble opprettet.
+Videreføring holder løpet åpent uten normal PDF/fullt sjåførinnsyn. Endelig avslutning med valgt Godkjent eller Oppfølgingsbehov lukker permanent; begge gir fullt innsyn og samlet PDF. Det kreves minst én dag, og alle opprettede dager må være ferdige. Ingen automatisk faglig godkjenning, dag 6 eller gjenåpning.
 
-A5 er avklart: Løpet er pågående, under oppfølging eller endelig avsluttet. Videreføring kan legge til nye dager innen femdagersgrensen uten å åpne tidligere dager. Endelig avslutning er enveis og skjer én gang; den gir varig fullt innsyn og samlet slutt-PDF for alle periodens dager og beslutninger. Ingen nye dager tillates etter avslutningen. Ikke bygg gjenåpning, tilbaketrekking av innsyn eller versjonerte delavslutninger.
+## Mobilvisning og profil
 
-Senere bruk på to enheter krever videre arbeid med identitet, tilgang, samtidighet og konflikter. Dette bygges ikke i V1. Mobilapp og Power Apps er mulige videreføringer; gjenbruk må utprøves før det loves. Se `docs/plattform-og-gjenbruk.md` for tidligere notater, ikke for et vedtatt stackvalg.
+Kategorier står under hverandre med kriterier i rader og tre rubrikker til høyre: OK / Kan bli bedre / Ikke relevant. Ett svar per punkt. Kolonneoverskriftene følger rullingen uten å dekke fokus eller popup, og brytes uten overlapping ved tekstforstørrelse. Dette er én aktiv vurdering om gangen, ikke alle perspektivene i en bred mobilmatrise.
 
-## Relevans etter separat førvurderingslås
+Tydelig spørsmålstegn ved hvert av de 22 punktene åpner én kort sammenhengende beskrivelse, omtrent 1–3 linjer, ved berøring. Oppgaven, hva man ser etter og hva man bør tenke på er innholdsrammer, ikke en fast tredelt mal med overskrifter. Samme korte hjelp skal være nyttig for begge roller i første iterasjon; egen dybdehjelp for fadder er kun mulig senere utvidelse. Synlig hjelp skal invitere til læring; den dempede sammenligningsvarianten er ikke valgt. Symbol og hjelp fjernes fra utskrift/PDF.
 
-A2 er avklart: Sjåføren skriver begrunnelsen før låsing. Valg og begrunnelse videreføres til ettervurderingen. Fadder bekrefter eller avslår uten retur til sjåfør og uten å endre låst innhold. Ved avslag skriver fadder egen kommentar og avgir egen vurdering; ved enighet kan fadder bekrefte begrunnelsen uten ny fritekst. Utdypende kommentar er mulig også ved enighet.
+Tide-logo og profil er autorisert. Prosjekteier har godkjent hele gjeldende skjermskisses visuelle uttrykk som standard for V1, inkludert font, farger, avstander, logoplassering og valgt synlig punkthjelp. Dette er godkjent produktutforming, ikke dokumentasjon på at systemfonten er offisiell Tide-profilfont. Eksakte tokens dokumenteres i [DESIGN.md](../../ux-designs/ux-Digital%20kjørevurdering-2026-10-29/DESIGN.md). Bruk original logo uten endrede proporsjoner. Reelle person-, avdelings- og interne opplysninger gjeninnføres ikke.
 
-Bevar sjåførens begrunnelse, fadderens avgjørelse og fadderens kommentar som adskilt informasjon med avsender. Dagsbekreftelse er ikke det samme som enighet om relevans. Både bekreftelse og dokumentert avslag kan gi en fullført dag. Vis forskjellen også i slutt-PDF-en.
+## Bekreftelser, PDF og lagring
 
-Begrunnelsen skal være mer enn ett ord eller noen få tegn. A10 foreslår minst tre ord og 15 tegn som ikke er blanktegn, også for påkrevd avslagskommentar. Tallet er et UX-forslag, ikke et uttrykkelig brukerkrav. En lengdekontroll kan ikke garantere meningsfullt innhold.
+Bekreftelsesdialog viser rolle, navn, dato, berørt del og permanent låsekonsekvens. Avbryt/lukk endrer ingenting. Brukeren skal kunne rette feil før bekreftelse; ingen etterfølgende administrativ retting inngår.
 
-## Øktopplysninger ved førvurderingslås
+Slutt-PDF bevarer én førvurdering med opprinnelig bekreftelse, alle daglige svar og separate bekreftelser, relevansbegrunnelser/-avgjørelser, kommentarer, evalueringer med faktiske dager, fadderkonklusjon, oppfølgingsbehov/planendringer med avsender og endelig utfall. Gjentatt førvurdering er historisk referanse. Ingen felles relevanskonklusjon eller påstand om at sjåfør godkjenner fadders meninger. Navn er ikke en identitetsverifisert signatur.
 
-Sjåføridentitet (deltaker-ID og bekreftende navn), øktdato og kobling til økt/fadderløp låses sammen med førvurderingen. Låsingen må også hindre omkobling gjennom endring av overordnede profil- eller løpsdata. Senere navneendring skal ikke omskrive historisk bekreftende navn.
+PDF kan lastes ned gjentatte ganger med samme låste innhold og overleveres manuelt til opplæringsansvarlig for HR-opplasting. Ingen automatisk sending eller integrasjon. Lange tekster må fortsette uten kutting; sidetall og tabelloverskrifter bevares. Første side skal være liggende med oppsummeringsfelt øverst og en kronologisk vurderingsmatrise inspirert av dagens fadderskjema, slik at progresjon kan sammenlignes side ved side. OK er grønt, Kan bli bedre gult og Ikke relevant rødt; tekst/symbol følger fargen. Ikke relevant er fortsatt et gyldig svar, ikke automatisk underkjenning.
 
-Buss 1/buss 2, linje og inn-tid kan fylles ut frem til dagslåsing. UX og arkitektur definerer en feltoversikt som skiller obligatorisk utfylling fra låsetidspunkt og konkretiserer de øvrige feltene, blant annet ut-tid og faddertilknytning. Ingen senere feltendring skal flytte førvurderingen til en annen person eller dag.
+Side 2 skal være stående for kommentarer/relevansbegrunnelser, egenevaluering og uttrykkelig godkjenning. Signaturformede felt viser vanlige tekstnavn fra faktiske bekreftelser: sjåfør venstre, fadder høyre, ekstra fadder i midten når aktuelt. Bevar del/rolle og historisk avsender; ingen håndtegnet eller identitetsverifisert signatur påstås. Ved større tekstmengde brukes videre sider uten kutting. Det tidligere femsiders PDF-forslaget er avvist, ikke et godkjent format.
 
-## Planleggingsmål for epics
+Ingen teknisk stakk er valgt. Lagring må bevare sammenhengende innhold og bekreftelsesstatus, også ved avbrudd, og håndheve lås utover UI-knapper. Gjenåpning viser faktisk lagret tilstand. Ulagrede endringer kan ikke bekreftes eller omtales som lagret. A4/A8 om mekanisme, tidsmål og nettbrudd er fortsatt åpne; full offlinebruk loves ikke. Historiske kriterier, krav og bekreftende navn må bevares ved senere regel-/profilendringer.
 
-Tre epics er fortsatt et foreløpig mål fra prosjekteiers tilbakemelding. Endelig inndeling gjøres etter UX og arkitektur, basert på sammenhengende leveranser og avhengigheter. Antallet er ikke en besluttet nedbrytning og skal ikke begrense nødvendige akseptansekriterier.
+## Videre planlegging
+
+A4, A7 og A8 følger til ansvarlig UX-/arkitekturarbeid med eiere i PRD. A1, A3 og A10 er nå avklart. Hele gjeldende UX-oppsettet er godkjent, inklusive fadderdel, Konklusjon og revidert PDF. Hjelpetekstene følger gjeldende UX-hjelpekilde. Den skal fortsatt være kort, situasjons- og kjøretøytilpasset, ikke absolutte råd som tilsidesetter skilting, forhold eller kjøretøyinstruks. To enheter, egne planleggingsroller og privat fagrapport er senere utvidelser. Opplæringsansvarligs forhåndsutfylling av sjåførnavn, ansattnummer, faddernavn og dato tilhører fullversjonen, ikke V1. Tre epics er kun et foreløpig mål; endelig nedbrytning følger UX og arkitektur.
+
+## Utvidet kjøretrening – UX-T1 avklart
+
+V1 registrerer utvidet kjøretrening kun som oppfølgingsbehov. Gjennomføring og klarsignal for videre fadderkjøring håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Ingen gjennomføringsregistrering, klarsignal-/gjenopptaksfunksjon, ny approlle, treningsmodul eller integrasjon innføres. Avsluttede løp gjenåpnes ikke, og samlet maksimum på fem dager står ved lag. Denne avklaringen og UX-godkjenningen finaliserer ikke PRD-workflowen.

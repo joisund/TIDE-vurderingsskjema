@@ -1,8 +1,13 @@
 # Overlevering – digital kjørevurdering
 
+**Siste UX-status: Ferdigstilt (final).** Hele UX-oppsettet og alle 22 hjelpetekster er godkjent av prosjekteier 2026-10-29. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1; gjennomføring og klarsignal håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Valgte skisser ligger i mockups/. Arkitektur er neste steg; A4/A8 (lagring og gjenopptakelse) og A7 (implementasjonens testmatrise) følger med dit.
 Oppdatert 2026-10-29. Dette er et gjeldende sammendrag, ikke en historisk beskrivelse av briefens første versjon.
 
-## Status og kildehierarki
+## Historisk arbeidslogg og kildehierarki
+
+**Oppdatert under UX 2026-10-29:** UX er nå startet i `_bmad-output/planning-artifacts/ux-designs/ux-Digital kjørevurdering-2026-10-29/`. Nyere brukeravklaringer i `.memlog.md` overstyrer eldre PRD-tekst og sammendraget nedenfor. De viktigste endringene er førvurdering kun før første dag, låst videreføring av førvurderingens Ikke relevant på dag 1 og nytt daglig relevansvalg fra dag 2, med popupbegrunnelse for begge roller, fadders tilgang gjennom hele dagen og planlagt siste dag styrt av fadder i V1. Oppsummeringen er sjåførens frivillige egenevaluering; fadder får valgfri konklusjon siste dag som inngår i skjema/PDF. Tide-profil og logo er nå ønsket. En separat rapport til fagansvarlig uten sjåførinnsyn er utsatt. PRD/addendum og kildeavstemminger er nå oppdatert med UX-beslutningene; PRD er et UX-revidert utkast, og den historiske sluttkontrollen gjelder den tidligere versjonen. Det visuelle V1-uttrykket og variant A er godkjent. Begrunnelser krever minst to ord og ti normaliserte tegn. Utkast til 22 hjelpetekster er skrevet og venter på faglig kontroll. A1-feltregler og ønsket visuell dekning er til avklaring; UX er ikke ferdigstilt. Se workflow-status for gjeldende fasestatus.
+
+### Overleveringsgrunnlag før UX
 
 Produktbrief og PRD er ferdigstilt. PRD har status **final** etter BMAD-sluttkontroll 2026-10-29 og er klar for UX. Avklarte produktkrav er grunnlaget videre; seks merkede detaljantakelser er uttrykkelig overført til UX/arkitektur. UX, arkitektur, epics/stories og sprintplan er ikke startet.
 
@@ -38,3 +43,8 @@ Disse avklaringene er innarbeidet samlet i PRD, addendum, kildeavstemming og wor
 Personopplysninger, samtalesitater, arbeidsgiverkoblinger og interne system-, tilgangs- og organisasjonsopplysninger skal ikke gjeninnføres. Bruk generiske eksempler og fiktive deltakere. Primærskjemaets dag 1–8 er kildehistorikk, ikke gjeldende produktgrense.
 
 Tre epics er et foreløpig planleggingsmål. Endelig nedbrytning følger etter UX og arkitektur.
+
+
+## Historisk status før endelig godkjenning
+
+Vurderingsskjema og egenevaluering er godkjent. Fadderdelen er revidert med Ja/Nei for oppfølgingsbehov, betingede valg for ekstra dager eller utvidet kjøretrening og kommentarer på alle 22 punkter. Avslutning samler tekst og Godkjent/Oppfølgingsbehov under Konklusjon. Det avviste femsiders PDF-forslaget er erstattet av en liggende progresjonsmatrise og en stående side med kommentarer, egenevaluering og signaturfelt. 15 hjelpetekster er godkjent, sju er revidert. Nye komposisjoner venter på brukergjennomgang. UX-T1: fortsettelsen etter utvidet kjøretrening må avklares. DESIGN.md og EXPERIENCE.md forblir draft.

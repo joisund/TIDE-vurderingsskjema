@@ -1,3 +1,5 @@
+> HISTORISK PLANLEGGINGSGRUNNLAG fra 2026-10-28. Åpne spørsmål nedenfor er senere behandlet i PRD-arbeidet: femdagersgrense, separate bekreftelser, førvurderingslås, relevans, avslutning og innsyn. Bruk [gjeldende PRD](../../prds/prd-Digital%20kjørevurdering-2026-10-29/prd.md) og dens addendum for krav. Dette notatet beholdes som kildehistorikk, ikke som oppdatert status.
+
 # Grunnlag og oppgaver for videre planlegging
 
 ## Kilder og dokumentasjon

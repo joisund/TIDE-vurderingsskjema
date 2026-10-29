@@ -7,6 +7,8 @@ updated: 2026-10-28
 
 # Digital kjørevurdering
 
+> Senere avklaring 2026-10-29: PRD-arbeidet har presisert normalt tre ordinære dager, kortere ved retur/lånesjåfør, og maksimalt fem dager inkludert oppfølging i samme løp. Dette erstatter føringen om støtte for dag 1–8 nedenfor. Den opprinnelige briefteksten beholdes som historisk grunnlag; gjeldende krav står i PRD-en.
+
 ## Mål og verdi
 
 Digital kjørevurdering skal gjøre det enklere å gjennomføre og dokumentere et helt fadderløp over flere dager. Sjåfør og instruktør/fadder skal kunne registrere vurderinger på mobil, følge utviklingen og avslutte med en samlet PDF. Dokumentasjonen skal kunne lastes opp manuelt i et HR-system og deles som kopi med den evaluerte.

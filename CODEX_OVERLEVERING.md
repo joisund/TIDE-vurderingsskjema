@@ -1,7 +1,9 @@
 # Overlevering – digital kjørevurdering
 
-**Siste UX-status: Ferdigstilt (final).** Hele UX-oppsettet og alle 22 hjelpetekster er godkjent av prosjekteier 2026-10-29. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1; gjennomføring og klarsignal håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Valgte skisser ligger i mockups/. Arkitektur er neste steg; A4/A8 (lagring og gjenopptakelse) og A7 (implementasjonens testmatrise) følger med dit.
-Oppdatert 2026-10-29. Dette er et gjeldende sammendrag, ikke en historisk beskrivelse av briefens første versjon.
+**Siste arkitekturstatus 2026-11-05: Final og godkjent.** Prosjekteier har godkjent alle anbefalte valg Q1–Q7. Gjeldende leveranser ligger i `_bmad-output/planning-artifacts/architecture/architecture-Digital kjørevurdering-2026-11-05/`: [ARCHITECTURE-SPINE.md](_bmad-output/planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md), [.memlog.md](_bmad-output/planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/.memlog.md) og [finalization-report.md](_bmad-output/planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/finalization-report.md). Valgt løsning er React/TypeScript/Vite, lokal IndexedDB, felles domene og klient-PDF. Noto Sans for PDF er avstemt i DESIGN; A4/A8/A7 og planreglene er avklart. Rapporten skiller utførte dokumentkontroller fra fremtidige apptester. Ingen app/epics/stories er opprettet. Ingen commit/push er utført. HEAD er fortsatt `5c109cd`; eldre statusavsnitt nedenfor er historikk.
+
+**Gjeldende UX-grunnlag: Ferdigstilt (final).** Hele UX-oppsettet og alle 22 hjelpetekster er godkjent av prosjekteier 2026-10-29. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1; gjennomføring og klarsignal håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Valgte skisser ligger i mockups/. A4/A8 og A7 er godkjent i arkitekturen. UX er avstemt med godkjent PDF-font og detaljregler, uten å endre øvrig produktomfang.
+Oppdatert 2026-11-05. Arkitekturen er godkjent; neste planlagte fase er epics/stories. Denne fasen er ikke startet. 2–3 epics er fortsatt en planleggingsramme, ikke en vedtatt inndeling. PRD beholder sin særskilte UX-reviderte draft-status.
 
 ## Historisk arbeidslogg og kildehierarki
 

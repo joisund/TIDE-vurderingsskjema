@@ -2,11 +2,13 @@
 title: "PRD: Digital kjørevurdering"
 status: draft
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-05
 amendment: "Avstemt med eksplisitte UX-beslutninger 2026-10-29; tidligere sluttkontroll gjelder eldre baseline."
 ---
 
 # PRD: Digital kjørevurdering
+
+**Arkitekturavstemming godkjent 2026-11-05:** Prosjekteier har vedtatt alle anbefalte Q1–Q7. A4/A8 følger lokal IndexedDB med 2 s lagringsmål, 60 s nettbruddsprøve og <=5 s gjenopptakelse under [arkitekturens betingelser](../../architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md); A7 følger godkjent nettlesermatrise og WCAG 2.2 AA-mål. Samme kontrakt avklarer planinnsyn, stigende dagsrekkefølge og erstatning av samme ulåste planbeslutning. PDF-font er Noto Sans etter avstemt DESIGN. Eldre formuleringer om at disse tekniske detaljene er åpne/antakelser er historiske. PRD beholder UX-revidert draft; denne avstemmingen er ikke ny PRD-finalisering eller utførte apptester.
 
 Revidert under UX 2026-10-29. Denne versjonen innarbeider prosjekteiers senere beslutninger i [UX-loggen](../../ux-designs/ux-Digital%20kjørevurdering-2026-10-29/.memlog.md). Den tidligere [sluttkontrollen](finalization-report.md) dokumenterer ferdigstillingen før disse endringene; den er ikke kjørt på nytt eller omskrevet. Status er derfor utkast til oppdatert kravgrunnlag, ikke ny formell ferdigstilling eller godkjenning for produksjon.
 
@@ -86,7 +88,7 @@ Ved sen utvidelse beholdes tidligere bekreftet egenevaluering låst på sin dag.
 
 **FR-9 – Lagring og lagringsstatus.** Svar, kommentarer, opplysninger, planer og evalueringer skal kunne lagres og gjenåpnes. Skill mellom lagring pågår, lagret og mislyktes, og forklar hva lagret betyr på enheten. Vis aldri lagret før mekanismen har bekreftet resultatet. Gjentatt forsøk skal ikke duplisere data.
 
-[ASSUMPTION A4: Automatisk lagring foreslås innen to sekunder etter siste inntasting/valg, med synlig nytt forsøk ved feil. Lagret arbeid foreslås bevart ved oppfrisking og normal gjenåpning i samme nettleserprofil/enhet, men ikke ved sletting av nettleserdata, privat nettlesing eller enhetsbytte. Betingelsene fastsettes i arkitektur.]
+[GODKJENT A4/A8 2026-11-05: Lokal IndexedDB med transaksjonskvittering innen 2 s etter siste endring i avtalt testprofil. Bevaring ved refresh/gjenåpning i samme origin/profil/enhet med nett og bevart lager; øvrige betingelser og avgrensninger følger AD-3/4.]
 
 **FR-10 – Kortvarig nettbrudd.** Ved nettbrudd i åpen økt vises forståelig status og tidligere lagret arbeid bevares uten omstart av økten. Ulagret innhold omtales aldri som lagret. Arkitektur avgjør om videre inntasting lagres lokalt eller må vente, og grensesnittet skal vise dette. Kald oppstart uten nett er ikke et V1-krav.
 
@@ -124,9 +126,9 @@ Side 2 er stående med kommentarer, relevansbegrunnelser, egenevaluering og uttr
 
 | ID | Krav og måling |
 | --- | --- |
-| NFR-1 | Mobilregistrering uten horisontal rulling, også brukbar på større skjerm. Kategorier under hverandre, kriterier i rader og tre svarkolonner OK / Kan bli bedre / Ikke relevant. Overskriftene følger rullingen. [ASSUMPTION A7: Test ved 360/1280 CSS-piksler og minst iOS-, Android- og skrivebordsnettleser; matrise ikke vedtatt.] |
+| NFR-1 | Mobilregistrering uten horisontal rulling, også brukbar på større skjerm. Kategorier under hverandre, kriterier i rader og tre svarkolonner OK / Kan bli bedre / Ikke relevant. Overskriftene følger rullingen. [GODKJENT A7 2026-11-05: 320/360/390/768/1280 CSSpx, faktiske iOS-/Android-/Windows-nettlesere og WCAG 2.2 AA-mål etter AD-12/testplanen.] |
 | NFR-2 | Lesbar tekst; status ikke bare farge; tastatur, tydelig fokus og avbrytbare dialoger. Ved tekstforstørrelse brytes overskrifter uten overlapping og dekker ikke fokus. Tydelig spørsmålstegn ved hvert av de 22 punktene åpner én kort sammenhengende beskrivelse på omtrent 1–3 linjer, uten fast tredelt overskriftsmal. Samme hjelp er nyttig for sjåfør og fadder i V1; innholdet handler relevant om oppgaven, observasjon og refleksjon. Hjelpen fjernes i utskrift; fagtekst er til prosjekteiers kontroll. |
-| NFR-3 | Null tap av data vist som Lagret ved avtalt nettbruddtest, oppfrisking og normal gjenåpning. [ASSUMPTION A8: 60 sekunders brudd og gjenopptakelse innen fem sekunder på samme enhet/profil med bevart lagring; må avklares.] |
+| NFR-3 | Null tap av data vist som Lagret ved avtalt nettbruddtest, oppfrisking og normal gjenåpning. [GODKJENT A8 2026-11-05: 60 s nettbrudd i lastet app og <=5 s gjenopptakelse på samme origin/enhet/profil med bevart lager under AD-4-betingelsene.] |
 | NFR-4 | Låst innhold kan ikke endres via støttet navigasjon, gammel redigeringsvisning eller endring av profil/løp. Arkitekturen håndhever reglene utover knapper. |
 | NFR-5 | PDF kontrolleres mot lagrede 22 + 44 × antall dager, alle bekreftelser, relevansavgjørelser, evalueringer, konklusjon, planendringer og utfall. Visuell kontroll av sideskift/lange tekster og komplett femdagersløp. |
 | NFR-6 | Kun fiktive persondata. Ingen automatisk sending eller HR-integrasjon. Tide-profil og original logo er uttrykkelig autorisert; reelle person-, avdelings- eller interne opplysninger gjeninnføres ikke. |
@@ -148,7 +150,7 @@ Side 2 er stående med kommentarer, relevansbegrunnelser, egenevaluering og uttr
 
 V1 inkluderer vurderingsløp, oppfølging/planlagt siste dag, bekreftelser/låsing, utkast, nettbruddhåndtering, punkthjelp og nedlastbar PDF. Ikke inkludert: reelle ansattdata, produksjonsinnlogging, administrasjonsportal, full offlinebruk, enhetssynkronisering, direkte utsending, HR-integrasjon, andre vurderingskategorier eller appbutikkpublisering.
 
-En separat rapport til fagansvarlig uten sjåførinnsyn er utsatt; den er ikke fadders konklusjon og innføres ikke i V1. Senere to-enhetsbruk, tilgang dagen før og planleggingsroller krever videre identitets-/tilgangsarbeid. Opplæringsansvarligs forhåndsutfylling av sjåførnavn, ansattnummer, faddernavn og dato ønskes i fullversjonen, ikke V1. Mer dyptgående hjelp bare for fadder er også en mulig senere utvidelse. Mobilapp/Power Apps skal vurderes, men ingen stakk, konvertering eller produksjonstilkobling er valgt. Permanente låser betyr at feil må oppdages før bekreftelse; reell dokumentretting vurderes før produksjon.
+En separat rapport til fagansvarlig uten sjåførinnsyn er utsatt; den er ikke fadders konklusjon og innføres ikke i V1. Senere to-enhetsbruk, tilgang dagen før og planleggingsroller krever videre identitets-/tilgangsarbeid. Opplæringsansvarligs forhåndsutfylling av sjåførnavn, ansattnummer, faddernavn og dato ønskes i fullversjonen, ikke V1. Mer dyptgående hjelp bare for fadder er også en mulig senere utvidelse. Webstakken React/TypeScript/Vite er godkjent. Mobilapp/Power Apps skal vurderes senere; ingen konvertering eller produksjonstilkobling er valgt. Permanente låser betyr at feil må oppdages før bekreftelse; reell dokumentretting vurderes før produksjon.
 
 ## Overlevering til UX og arkitektur
 
@@ -158,9 +160,9 @@ En separat rapport til fagansvarlig uten sjåførinnsyn er utsatt; den er ikke f
 | --- | --- |
 | A1 | Avklart i UX: obligatorisk navn/ansattnummer/faddernavn/dato/buss/linjer/inn-/ut-tid. Begge roller kan redigere tider; fadder fullfører mangler. Fadderbytte tillates til endelig dagsbekreftelse. Trinnvis validering beskrives som implementeringstolkning i FR-3. |
 | A3 | Avklart i UX: sjåfør eier egenevaluering, låsing med etterbekreftelse, én evaluering ved ett-dagsløp, historikk beholdes ved sen utvidelse. Konklusjon låses ved avslutning. |
-| A4 | Åpent: lagringsbetingelser og foreslått tosekundersmål. Arkitekt/prosjekteier før lagringsløsning. |
-| A7 | Åpent: testbredder/nettlesere og tilgjengelighetsmål. UX/arkitekt før implementeringsplan. |
-| A8 | Åpent: nettbruddtest og foreslått femsekundersmål. Arkitekt/prosjekteier før lagringshistorier. |
+| A4 | Godkjent 2026-11-05: lokal IndexedDB og 2 s lagringsmål under AD-3/4-betingelsene. Verifiseres ved implementering. |
+| A7 | Godkjent 2026-11-05: testmatrise og WCAG 2.2 AA-mål i AD-12/testplanen. Verifiseres ved implementering. |
+| A8 | Godkjent 2026-11-05: 60 s nettbruddsprøve og <=5 s gjenopptakelse under AD-4-betingelsene. Verifiseres ved implementering. |
 | UX-T1 | Avklart: V1 registrerer bare oppfølgingsbehov. Kjøretrening og klarsignal håndteres utenfor appen, primært i samtale med opplæringsansvarlig. |
 | A10 | Avklart i UX: minst to ord og ti normaliserte tegn; tell enkle mellomrom, ikke tegnsetting alene som ord. |
 

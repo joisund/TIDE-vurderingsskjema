@@ -1,0 +1,98 @@
+{
+  "status": "complete",
+  "intent": "update",
+  "altitude": "feature",
+  "purpose": "build-substrate",
+  "workflow_completed": true,
+  "architecture_status": "final",
+  "architecture_approved": true,
+  "date": "2026-11-05",
+  "baseline_commit": "5c109cd",
+  "initial_worktree_clean": true,
+  "doc_workspace": "_bmad-output/planning-artifacts/architecture/architecture-Digital kjørevurdering-2026-11-05",
+  "spine": "ARCHITECTURE-SPINE.md",
+  "memlog": ".memlog.md",
+  "companions": [
+    "research-notes.md",
+    "verification-plan.md",
+    "finalization-report.md"
+  ],
+  "open_questions": [],
+  "conflicts_with_prior_decisions": [],
+  "implementation_started": false,
+  "epic_story_workflow_started": false,
+  "app_tests_executed": false,
+  "commit_created": false,
+  "push_performed": false,
+  "external_handoffs": [],
+  "approval_date": "2026-11-05",
+  "adopted_decisions": [
+    "AD-1/2: React/TypeScript/Vite, lett heksagonal klient, statisk HTTPS-demo uten backend/service worker.",
+    "AD-3/4: IndexedDB, autosave complete innen 2 s i testprofil, 60 s nettbruddsprøve, <=5 s gjenopptakelse under dokumenterte betingelser.",
+    "AD-5/13: transaksjonell revisjonskontroll, idempotens, versjonerte migreringer og sperret ukjent schema.",
+    "AD-7: felles Unicode-presisering av A10, stabile svarposisjoner og eksakt kriterie-ID-dekning.",
+    "AD-8: dato-/dagrekkefølge og erstatning av redigerbar planbeslutning med bevaring av låst historikk.",
+    "AD-9: sjåfør ser gjeldende planlagt siste dag, men ikke fadderbegrunnet planhistorikk før avslutning.",
+    "AD-11: klient-PDF-motor og godkjent Noto Sans for PDF.",
+    "AD-12: godkjent A7-matrise og WCAG 2.2 AA som webkvalitetsmål."
+  ],
+  "resolved_questions": [
+    {
+      "id": "Q1",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q2",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q3",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q4",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q5",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q6",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    },
+    {
+      "id": "Q7",
+      "status": "approved",
+      "choice": "recommended",
+      "approved_by": "prosjekteier",
+      "date": "2026-11-05"
+    }
+  ],
+  "resolved_conflicts": [
+    "Q5: Noto Sans er godkjent for PDF; DESIGN er avstemt, skjermfont beholdes."
+  ],
+  "deferred_execution_tasks": [
+    "Host før publisering",
+    "Eksakte testpakker/fontfiler med kilde/lisens/hash før bygg",
+    "Runtime-/mobil-/PDF-test ved implementering"
+  ]
+}

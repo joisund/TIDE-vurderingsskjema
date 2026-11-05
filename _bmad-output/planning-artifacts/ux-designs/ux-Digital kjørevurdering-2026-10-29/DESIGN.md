@@ -3,7 +3,7 @@ name: Digital kjørevurdering
 description: Godkjent visuell V1-standard for digital kjørevurdering og samlet PDF.
 status: final
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-05
 sources:
   - .memlog.md
   - mockups/key-vurdering.html
@@ -34,7 +34,7 @@ colors:
   pdf-ink: '#333333'
   pdf-grid: '#9A9A9A'
 typography:
-  pdf: {fontFamily: 'Segoe UI'}
+  pdf: {fontFamily: 'Noto Sans'}
   body: {fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', fontSize: 16px, fontWeight: '400', lineHeight: '1.45'}
   title: {fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', fontSize: 25px, fontWeight: '700', lineHeight: '1.2'}
   context: {fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', fontSize: 14px, fontWeight: '400', lineHeight: '1.45'}
@@ -91,11 +91,13 @@ components:
 
 ## Brand & Style
 
+**Godkjent arkitekturavstemming 2026-11-05:** Prosjekteier har godkjent Q5: PDF bruker Noto Sans i statiske TTF-filer med dokumentert kilde/lisens/hash. Skjermfont og øvrig godkjent PDF-layout beholdes. Eksisterende PDF-prøve og skisser er historiske layoutreferanser med tidligere font; ny font skal kontrolleres visuelt når faktisk PDF-generering bygges. Dette er et godkjent fontvalg, ikke utført font-/apptest. Se [arkitektur](../../architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md).
+
 Løsningen skal oppleves som et enkelt arbeidsverktøy og en opplæringsplattform i Tides grafiske profil. Prosjekteier har godkjent skrifttype, fargebruk, luft, logo og tydelig punkthjelp variant A i [vurderingsskissen](mockups/key-vurdering.html) som visuell standard for V1. Synlig hjelp skal invitere til nysgjerrighet og læring; selve avkrysningen skal være enkel.
 
 Tides offisielle palett og [originale logo](imports/tide-logo-rgb.png) er merkevareressurser. Systemfont, komponentstørrelser og layout i dette dokumentet er godkjente produktvalg, ikke påståtte regler fra Tides profilhåndbok. Logoen står til venstre i profilhodet med bredde `{components.profile-header.logo-width}` og uendret proporsjon. Luft følger `{components.profile-header.padding}`. Dette er godkjent plassering, ikke en påstand om et offisielt minimumsmål for logofrirom.
 
-Telefonrammer, gjennomgangshode, bildetekster, variantetiketter og bakgrunn rundt skissene er presentasjon, ikke appdesign. Prosjekteier har godkjent hele oppsettet, inkludert hjelpetekster og skjerm-/PDF-komposisjoner. A1-feltreglene er avklart i EXPERIENCE.md. Formell final-status settes etter sluttkontroll. `DESIGN.md` eier utseende og [EXPERIENCE.md](EXPERIENCE.md) eier oppførsel. Ved konflikt går dokumentene foran illustrasjoner; nyeste brukerbeslutninger i [.memlog.md](.memlog.md) overstyrer eldre PRD-tekst. [Kildeavstemmingen](reconcile-prd.md) dokumenterer endringene.
+Telefonrammer, gjennomgangshode, bildetekster, variantetiketter og bakgrunn rundt skissene er presentasjon, ikke appdesign. Prosjekteier har godkjent hele oppsettet, inkludert hjelpetekster og skjerm-/PDF-komposisjoner. A1-feltreglene er avklart i EXPERIENCE.md. UX har final-status fra 2026-10-29; arkitekturavstemmingen er godkjent 2026-11-05. `DESIGN.md` eier utseende og [EXPERIENCE.md](EXPERIENCE.md) eier oppførsel. Ved konflikt går dokumentene foran illustrasjoner; nyeste brukerbeslutninger i [.memlog.md](.memlog.md) overstyrer eldre PRD-tekst. [Kildeavstemmingen](reconcile-prd.md) dokumenterer endringene.
 
 ## Colors
 
@@ -120,7 +122,7 @@ Kontrastkontroll med sRGB-luminans: grå/hvit **7,17:1**, grå/lys sand **5,64:1
 
 Skissens systemfont er godkjent produktfont, ikke dokumentert Tide-profilfont. `{typography.body.fontFamily}` er standardstakken; input, knapper og spørsmålstegn bruker skissens `system-ui`. Hovedtittel bruker `{typography.title.fontSize}`, kriterietekst `{typography.criterion.fontSize}` og kolonneoverskrifter `{typography.column.fontSize}`. Punktnummeret på `{typography.criterion-number.fontSize}` er tilleggsinformasjon; kriteriets innhold står separat. Dialogtittel bruker `{typography.dialog-title.fontSize}`. Øvrige roller følger frontmatter.
 
-Størrelsene er utgangspunkt ved normal tekststørrelse, ikke en sperre mot forstørrelse. Kriterier, kolonneoverskrifter, knapper og dialoginnhold skal kunne brytes uten overlapping eller avkutting. Kolonneoverskrifter og kriterietekst tillater ordbrudd ved behov. Ingen komponentbibliotek eller teknisk stakk er valgt.
+Størrelsene er utgangspunkt ved normal tekststørrelse, ikke en sperre mot forstørrelse. Kriterier, kolonneoverskrifter, knapper og dialoginnhold skal kunne brytes uten overlapping eller avkutting. Kolonneoverskrifter og kriterietekst tillater ordbrudd ved behov. Godkjent arkitektur bruker React/TypeScript/Vite og vanlig CSS fra disse tokens; ingen separat komponentpakke er valgt.
 
 ## Layout & Spacing
 
@@ -181,4 +183,4 @@ Samme komponentnavn brukes i EXPERIENCE.md. Der en flate ennå ikke har egen ski
 | Skill svar, begrunnelse, behandling og bekreftelse med avsender og tekst. | Bruk farge alene eller én felles vurdering ved uenighet. |
 | Bruk oppsettet som godkjent V1-standard; ferdigstill resterende flater innen samme språk. | Overfør telefonramme, ytre skissehode eller demonstrasjonsposisjon for dialog til appen. |
 
-**Godkjent UX-grunnlag:** de 22 korte hjelpetekstene, vurderingsskjema, fadderdel, egenevaluering, avslutning og PDF-oppsett. A1 og UX-T1 er avklart; videre lagrings-/testbeslutninger står som arkitekturoppgaver i EXPERIENCE.md. Systemfont, palettbruk, luft, logo og punkthjelp A er godkjent og skal ikke spørres om på nytt. Mørk visning er ikke del av den godkjente lyse skissen og innføres ikke automatisk.
+**Godkjent UX-grunnlag:** de 22 korte hjelpetekstene, vurderingsskjema, fadderdel, egenevaluering, avslutning og PDF-oppsett. A1 og UX-T1 er avklart; A4/A8 og A7 er godkjent i arkitekturen og skal verifiseres ved implementering etter testplanen. Systemfont, palettbruk, luft, logo og punkthjelp A er godkjent og skal ikke spørres om på nytt. Mørk visning er ikke del av den godkjente lyse skissen og innføres ikke automatisk.

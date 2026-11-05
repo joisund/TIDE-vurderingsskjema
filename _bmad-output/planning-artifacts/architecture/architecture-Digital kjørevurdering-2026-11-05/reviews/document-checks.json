@@ -1,0 +1,50 @@
+{
+  "kind": "document_checks_only",
+  "ad_ids": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13"
+  ],
+  "ad_ids_unique_contiguous_1_13": true,
+  "spine_status_final": true,
+  "approval_record_complete": true,
+  "design_tokens_only_pdf_font_changed": true,
+  "input_ux_status_final": true,
+  "input_prd_status_draft": true,
+  "criteria_in_current_addendum": 22,
+  "answer_positions_for_1_2_3_5_days": {
+    "1": 66,
+    "2": 110,
+    "3": 154,
+    "5": 242
+  },
+  "checked_markdown_files": 24,
+  "broken_local_links": [],
+  "contrast_ratios": {
+    "#53585F/#FFFFFF": 7.17,
+    "#53585F/#F1E2CE": 5.64,
+    "#361EBD/#FFFFFF": 10.11,
+    "#361EBD/#F1E2CE": 7.95,
+    "#53585F/#E0D3C3": 4.87,
+    "#2FDA95/#FFFFFF": 1.81,
+    "#E0D3C3/#FFFFFF": 1.47,
+    "#333333/#CDECCD": 9.91,
+    "#333333/#FFF0A6": 10.99,
+    "#333333/#F6C0BF": 7.95,
+    "#9A9A9A/#FFFFFF": 2.81
+  },
+  "mermaid_blocks": 2,
+  "mermaid_check": "manual syntax inspection; not rendered or parser-validated",
+  "app_tests_executed": false,
+  "ok": true
+}

@@ -2,6 +2,8 @@
 
 Oppdatert 2026-10-29 etter uttrykkelige UX-beslutninger. Dette er gjeldende detaljgrunnlag til revidert PRD, ikke en ny formell sluttkontroll. Tidligere finalization-report.md gjelder den eldre PRD-baselinen og er bevart uendret. Beslutningshistorikk ligger i [UX-loggen](../../ux-designs/ux-Digital%20kjørevurdering-2026-10-29/.memlog.md).
 
+**Arkitekturavstemming godkjent 2026-11-05:** Prosjekteier har vedtatt alle anbefalte Q1–Q7. A4/A8 følger lokal IndexedDB med 2 s lagringsmål, 60 s nettbruddsprøve og <=5 s gjenopptakelse under [arkitekturens betingelser](../../architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md); A7 følger godkjent nettlesermatrise og WCAG 2.2 AA-mål. Samme kontrakt avklarer planinnsyn, stigende dagsrekkefølge og erstatning av samme ulåste planbeslutning. PDF-font er Noto Sans etter avstemt DESIGN. Eldre formuleringer om at disse tekniske detaljene er åpne/antakelser er historiske. PRD beholder UX-revidert draft; denne avstemmingen er ikke ny PRD-finalisering eller utførte apptester.
+
 ## Primærskjema og kriterier
 
 Begge sider i `docs/Eksempel vurderingsskjema.pdf` er rendret og visuelt lest. Side 1 gir 22 kriterier med tydelig adskilte vurderingsperspektiver og kommentarer. Side 2 gir veiledning og første-/sistedagsevaluering med tre styrker, tre utviklingsområder, dato og bekreftelser. Kriterieordlyd nedenfor er uendret fra godkjent addendum, med normaliserte linjebrudd og generisk betegnelse i kriterium 10. Øvrige vurderingskategorier i papirskjemaet er utenfor V1.
@@ -90,11 +92,11 @@ PDF kan lastes ned gjentatte ganger med samme låste innhold og overleveres manu
 
 Side 2 skal være stående for kommentarer/relevansbegrunnelser, egenevaluering og uttrykkelig godkjenning. Signaturformede felt viser vanlige tekstnavn fra faktiske bekreftelser: sjåfør venstre, fadder høyre, ekstra fadder i midten når aktuelt. Bevar del/rolle og historisk avsender; ingen håndtegnet eller identitetsverifisert signatur påstås. Ved større tekstmengde brukes videre sider uten kutting. Det tidligere femsiders PDF-forslaget er avvist, ikke et godkjent format.
 
-Ingen teknisk stakk er valgt. Lagring må bevare sammenhengende innhold og bekreftelsesstatus, også ved avbrudd, og håndheve lås utover UI-knapper. Gjenåpning viser faktisk lagret tilstand. Ulagrede endringer kan ikke bekreftes eller omtales som lagret. A4/A8 om mekanisme, tidsmål og nettbrudd er fortsatt åpne; full offlinebruk loves ikke. Historiske kriterier, krav og bekreftende navn må bevares ved senere regel-/profilendringer.
+Godkjent arkitektur bruker React/TypeScript/Vite og lokal IndexedDB. Lagring må bevare sammenhengende innhold og bekreftelsesstatus, også ved avbrudd, og håndheve lås utover UI-knapper. Gjenåpning viser faktisk lagret tilstand. Ulagrede endringer kan ikke bekreftes eller omtales som lagret. A4/A8 om mekanisme, tidsmål og nettbrudd er godkjent med AD-3/4-betingelsene; full offlinebruk loves ikke. Historiske kriterier, krav og bekreftende navn må bevares ved senere regel-/profilendringer.
 
 ## Videre planlegging
 
-A4, A7 og A8 følger til ansvarlig UX-/arkitekturarbeid med eiere i PRD. A1, A3 og A10 er nå avklart. Hele gjeldende UX-oppsettet er godkjent, inklusive fadderdel, Konklusjon og revidert PDF. Hjelpetekstene følger gjeldende UX-hjelpekilde. Den skal fortsatt være kort, situasjons- og kjøretøytilpasset, ikke absolutte råd som tilsidesetter skilting, forhold eller kjøretøyinstruks. To enheter, egne planleggingsroller og privat fagrapport er senere utvidelser. Opplæringsansvarligs forhåndsutfylling av sjåførnavn, ansattnummer, faddernavn og dato tilhører fullversjonen, ikke V1. Tre epics er kun et foreløpig mål; endelig nedbrytning følger UX og arkitektur.
+A4, A7 og A8 er godkjent i arkitekturen 2026-11-05; faktisk verifikasjon følger ved implementering. A1, A3 og A10 er avklart. Hele gjeldende UX-oppsettet er godkjent, inklusive fadderdel, Konklusjon og revidert PDF. Hjelpetekstene følger gjeldende UX-hjelpekilde. Den skal fortsatt være kort, situasjons- og kjøretøytilpasset, ikke absolutte råd som tilsidesetter skilting, forhold eller kjøretøyinstruks. To enheter, egne planleggingsroller og privat fagrapport er senere utvidelser. Opplæringsansvarligs forhåndsutfylling av sjåførnavn, ansattnummer, faddernavn og dato tilhører fullversjonen, ikke V1. 2–3 epics er kun en planleggingsramme; endelig nedbrytning følger arkitekturen.
 
 ## Utvidet kjøretrening – UX-T1 avklart
 

@@ -1,14 +1,19 @@
 # BMAD-workflow: Digital kjørevurdering
 
-**Siste UX-status: Ferdigstilt (final).** Hele UX-oppsettet og alle 22 hjelpetekster er godkjent av prosjekteier 2026-10-29. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1; gjennomføring og klarsignal håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Valgte skisser ligger i mockups/. Arkitektur er neste steg; A4/A8 (lagring og gjenopptakelse) og A7 (implementasjonens testmatrise) følger med dit.
-Fase: UX ferdigstilt (`bmad-ux`). Produktbrief og opprinnelig PRD ble ferdigstilt 2026-10-29. Prosjekteier har siden endret flere krav gjennom UX-avklaringer; tidligere PRD-sluttkontroll dekker ikke disse endringene.
+**Siste arkitekturstatus 2026-11-05: Ferdigstilt (final) og godkjent.** Prosjekteier har godkjent alle anbefalte valg Q1–Q7. [Arkitekturdokument](planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md), [beslutningslogg](planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/.memlog.md) og [kontroll-/vedtaksrapport](planning-artifacts/architecture/architecture-Digital%20kjørevurdering-2026-11-05/finalization-report.md) er gjeldende grunnlag. A4/A8 og A7 er avklart; Noto Sans for PDF er avstemt i DESIGN. Epics/stories og implementering er ikke startet; ingen commit/push er utført.
+
+## Gjeldende UX-grunnlag og historikk
+
+**Siste UX-status: Ferdigstilt (final).** Hele UX-oppsettet og alle 22 hjelpetekster er godkjent av prosjekteier 2026-10-29. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1; gjennomføring og klarsignal håndteres utenfor løsningen, primært i samtale med opplæringsansvarlig. Valgte skisser ligger i mockups/. A4/A8 og A7 er godkjent i arkitekturen; PDF-font og avklarte detaljregler er avstemt i UX.
+Fase: Arkitektur ferdigstilt og godkjent; epics/stories er neste planlagte fase, ikke startet. Produktbrief og opprinnelig PRD ble ferdigstilt 2026-10-29. Prosjekteier har siden endret flere krav gjennom UX-avklaringer; tidligere PRD-sluttkontroll dekker ikke disse endringene. PRD er fortsatt UX-revidert utkast.
 
 Historisk arbeidsstatus før endelig godkjenning — UX-arbeidsmappe: `planning-artifacts/ux-designs/ux-Digital kjørevurdering-2026-10-29/`. Beslutninger registreres i `.memlog.md`; `DESIGN.md` og `EXPERIENCE.md` har første utkast. En statisk mobilskisse ligger i `.working/key-vurdering.html`. Kravdekning og tilgjengelighet er validert etter prosjekteiers valg; rapportene dokumenterer rettinger og åpne regler. Nyere brukerbeslutninger i loggen overstyrer motstridende PRD-tekst. PRD/addendum er nå avstemt med UX-beslutningene og PRD er merket UX-revidert utkast. Det visuelle uttrykket er godkjent; A10 er to ord og ti tegn. 22 hjelpetekster er skrevet som utkast for faglig kontroll. A1 og ønsket mock-dekning avventer avklaring. UX er ikke ferdigstilt.
 
 ## Bekreftet retning
 
 Mobiltilpasset webapp/PWA med fiktive data som første leveranse.
-Tilrettelegg for senere mobilapp eller Power Apps. Stakk er ikke valgt.
+Tilrettelegg for senere mobilapp eller Power Apps. Godkjent webstakk er
+React/TypeScript/Vite med lokal IndexedDB og klientgenerert PDF.
 V1 viser et helt fadderløp over flere dager med rollebytte på én enhet.
 To enheter skal tilrettelegges for senere, men implementeres ikke i V1.
 Generering av nedlastbar PDF til manuell opplasting i et HR-system og kopi
@@ -34,12 +39,12 @@ Et omskrevet skjemagrunnlag er tilgjengelig som alternativ for demonstrasjonen.
 | Produktbrief | bmad-product-brief | Ferdigstilt |
 | Krav | bmad-prd | UX-revidert utkast; endringer avstemt, gjenstående detaljer merket |
 | Brukeropplevelse | bmad-ux | Ferdigstilt og godkjent 2026-10-29 |
-| Arkitektur | bmad-architecture | Ikke startet |
+| Arkitektur | bmad-architecture | Ferdigstilt (final), Q1–Q7 godkjent 2026-11-05 |
 | Epics og stories | bmad-create-epics-and-stories | Ikke startet |
 | Sprintplan | bmad-sprint-planning | Ikke startet |
 | Implementering | bmad-build | Ikke startet |
 
-Neste steg er `bmad-architecture`, med godkjent DESIGN.md/EXPERIENCE.md og UX-avstemt PRD/addendum som grunnlag. PRD står som UX-revidert utkast; den historiske PRD-sluttkontrollen dekker ikke de nyere UX-endringene. A1/A3/A10 og UX-T1 er avklart. A4/A8 og A7 følger til arkitektur før berørte stories og tester fastsettes.
+Neste planlagte steg er epics/stories basert på godkjent arkitektur og avstemt UX/PRD, med 2–3 epics som ramme. Fasen er ikke startet. A1/A3/A10 og UX-T1 er avklart; A4/A8 og A7 er nå godkjent i arkitekturen. PRD beholder UX-revidert draft; tidligere PRD-sluttkontroll dekker ikke den reviderte baselinen. App-/mobil-/PDF-testene gjenstår ved implementering.
 
 Etter arkitektur følger epics/stories og sprintplan. Disse fasene er ikke startet. Denne filen er workflow-status, ikke generert sprintstatus.
 

@@ -2,7 +2,7 @@
 name: Digital kjørevurdering
 status: final
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-05
 sources:
   - .memlog.md
   - ../../prds/prd-Digital kjørevurdering-2026-10-29/prd.md
@@ -15,7 +15,9 @@ sources:
 
 ## Foundation
 
-Mobiltilpasset webapp/PWA med støtte for større skjerm. V1 er en intern demonstrasjon med fiktive data og rollebytte på én enhet. Rollebyttet simulerer arbeidsdeling; det er ikke produksjonsautorisasjon. Ingen UI-system eller teknisk stakk er valgt. [DESIGN.md](DESIGN.md) er referansen for visuell identitet, inkludert `{colors.tide-gronn}` for profilens positive logo.
+**Arkitekturavstemming godkjent 2026-11-05:** Q1–Q7 er vedtatt med anbefalte valg. Sjåfør ser gjeldende planlagt siste dag underveis; fadderbegrunnelser og detaljert planhistorikk skjules frem til avslutning. Samme ulåste dags planredigering erstatter tidligere effekt; «Nei» kan trekke tilbake denne effekten innen AD-8-grensene, uten å endre låste beslutninger/evalueringer eller slette historikk. Nye dager følger stigende dato-/dagrekkefølge og ligger innen gjeldende plan. A4/A8 og A7 følger [godkjent arkitektur](../../architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md). Dette presiserer tidligere åpne detaljer; ingen apptester er utført.
+
+Mobiltilpasset webapp/PWA med støtte for større skjerm. V1 er en intern demonstrasjon med fiktive data og rollebytte på én enhet. Rollebyttet simulerer arbeidsdeling; det er ikke produksjonsautorisasjon. Godkjent arkitektur bruker React/TypeScript/Vite og vanlig CSS fra DESIGN, uten separat komponentpakke. [DESIGN.md](DESIGN.md) er referansen for visuell identitet, inkludert `{colors.tide-gronn}` for profilens positive logo.
 
 Nyeste brukeravklaringer i [.memlog.md](.memlog.md) styrer kontrakten. Prosjekteier har godkjent hele oppsettet. [reconcile-prd.md](reconcile-prd.md) dokumenterer avstemmingen mot PRD; eldre sluttkontroller beholdes som historikk.
 
@@ -46,11 +48,11 @@ Begrunnelsesdialogen er en popup over S4/S5/S6. Den er ikke en egen navigasjonsd
 
 ## Voice and Tone
 
-Bruk direkte, norsk arbeidsspråk. Skill lagring fra bekreftelse og avslutning fra behov for mer oppfølging. Tekstene nedenfor angir ordlyd og hensikt for brukerbeskjeder; teknisk lagringssted fylles inn etter arkitekturvalget.
+Bruk direkte, norsk arbeidsspråk. Skill lagring fra bekreftelse og avslutning fra behov for mer oppfølging. Tekstene nedenfor angir ordlyd og hensikt for brukerbeskjeder; lagringssted er lokal IndexedDB i samme nettleserprofil på denne enheten.
 
 | Situasjon | Tekstretning |
 | --- | --- |
-| Lagret utkast | «Lagret» med konkret forklaring av lagringssted når arkitekturvalget er gjort. |
+| Lagret utkast | «Lagret på denne enheten» først etter fullført lokal transaksjon; ingen serverkopi eller synkronisering. |
 | Ikke lagret | «Endringene er ikke lagret. Prøv igjen.» Ikke lov brukeren at ulagret arbeid er bevart. |
 | Manglende svar | «Du har ubesvarte vurderingspunkter.» Vis hvilke og gå til dem. |
 | Ikke relevant | «Begrunn hvorfor dette ikke er relevant.» Bruk kriteriets navn som kontekst. |
@@ -80,7 +82,7 @@ Visuell utforming står i DESIGN.md. Komponentene deler navn på tvers av dokume
 | Begrunnelsesdialog | Krev forklaring ved eget valg av Ikke relevant for begge roller. Minst to ord og ti tegn etter trimming og normalisering av mellomrom, inkludert ett mellomrom mellom ord; se avklart A10 nedenfor. Samme regel gjelder fadders avslagskommentar. Avbryt skal ikke bekrefte valget eller låse noe. |
 | Relevansbehandling | Ikke relevant valgt før første dag videreføres med begrunnelsen og kan ikke fjernes eller endres i ettervurderingen dag 1. Fadder bekrefter eller avslår det videreførte valget i sin del, uten å endre sjåførens svar. Avslag krever egen kommentar. Egen faddervurdering og behandling av sjåførens relevans er adskilt informasjon. Fra dag 2 velger sjåføren relevans på nytt hver dag; nye Ikke relevant-valg krever popup-begrunnelse og fadderbehandling. |
 | Fadderkommentar | Hvert av de 22 vurderingspunktene har en tilgjengelig «Kommentar»-handling uavhengig av valgt svar. Åpner punktets kommentarfelt; redigerbart gjennom dagen til egen bekreftelse. Kommentar er frivillig ellers, påkrevd ved relevansavslag. Fadders egen Ikke relevant-begrunnelse kreves separat. Handlingen navngis med kriteriet for skjermleser og formidler åpen/lukket tilstand. |
-| Oppfølgingsplan | Fadder svarer Ja/Nei hver dag og kan registrere behov underveis før sjåførens ettervurdering. Nei skjuler detaljfeltene. Ja viser enten antall ekstra fadderdager innen maksimalt fem totalt, eller «Utvidet kjøretrening før fadderkjøring fortsetter». Ved ekstra dager avledes ny planlagt siste dag fra gjeldende plan; det er ikke et direkte valg av nytt totalt dagnummer. Registrering låser ikke dagen og gir ikke fullt innsyn/PDF. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1. Gjennomføring og klarsignal avklares utenfor løsningen, primært i samtale med opplæringsansvarlig; se avklart UX-T1. |
+| Oppfølgingsplan | Fadder svarer Ja/Nei hver dag og kan registrere behov underveis før sjåførens ettervurdering. Nei skjuler detaljfeltene. Ja viser enten antall ekstra fadderdager innen maksimalt fem totalt, eller «Utvidet kjøretrening før fadderkjøring fortsetter». Ved ekstra dager avledes ny planlagt siste dag etter AD-8; redigering av samme ulåste beslutning erstatter tidligere effekt, og er ikke et direkte valg av nytt totalt dagnummer. Registrering låser ikke dagen og gir ikke fullt innsyn/PDF. Utvidet kjøretrening registreres bare som oppfølgingsbehov i V1. Gjennomføring og klarsignal avklares utenfor løsningen, primært i samtale med opplæringsansvarlig; se avklart UX-T1. |
 | Egenevaluering | Sjåføren fyller tre styrker og tre utviklingsområder frivillig. Tilbys etter avkrysning første og planlagt siste dag; utvidelse flytter siste-dagstilbudet. Tomme felt og «Hopp over» blokkerer ikke. Egenevalueringen låses sammen med sjåførens egen dagsbekreftelse. Ett-dagsløp har én felles egenevaluering, ikke to. Ved senere utvidelse beholdes den på sin dag og ny frivillig egenevaluering tilbys på ny siste dag. |
 | Fadderkonklusjon | Én gruppe med overskriften «Konklusjon»: valgfritt fritekstfelt først, så påkrevd valg «Godkjent» / «Oppfølgingsbehov» rett under. Ingen forhåndsvalg. Teksten inngår i fullt skjema og PDF og kan redigeres frem til endelig avslutning. Gruppen er ikke den fremtidige private rapporten. Ordet «utfall» brukes ikke i grensesnittet. |
 | Lagringsstatus | Vis pågår/lagret/mislyktes etter faktisk resultat. Gi nytt forsøk uten duplisering. Ulagret innhold blokkerer relevant bekreftelse. |
@@ -137,7 +139,7 @@ Felles nettbruddregel: Bevar tidligere lagret arbeid og vis sann lagringsstatus.
 | Buss og linjer | Fadder fyller og redigerer; minst én buss og linjer er obligatoriske | Ved dagslåsing | Egne øktopplysninger, kun lesing |
 | Inn-tid og ut-tid | Begge roller kan fylle/endre; fadder fullfører mangler, timer/minutter | Ved dagslåsing | Sjåfør kan lese og fylle tidene frem til dagslåsing |
 | Faddertilknytning | Fadder kan endres underveis i skiftet | Dagens faktiske bekreftende faddernavn bevares ved dagsbekreftelse; historiske bekreftelser endres aldri | Etter gjeldende rolleinnsyn |
-| Oppfølgingsplan | Fadder underveis i åpent løp | Historiske låste dager endres ikke; plan gjelder videre løp | Sjåfør får riktig tilbud om sluttoppsummering; detaljert plansynlighet er åpen |
+| Oppfølgingsplan | Fadder underveis i åpent løp | Historiske låste dager endres ikke; plan gjelder videre løp | Sjåfør får riktig tilbud om sluttoppsummering; gjeldende siste dag vises, detaljert planhistorikk skjules til avslutning (Q4 godkjent 2026-11-05) |
 | Egenevaluering første/siste dag | Sjåfør, frivillig | Sammen med sjåførens egen dagsbekreftelse | Egen tekst |
 | Fadderkonklusjon | Fadder skriver konklusjonsteksten siste dag. Teksten er frivillig og redigerbar frem til avslutning | Ved periodens endelige avslutning | Etter avslutning, også i PDF |
 | Avslutning og utfall | Fadder når alle opprettede dager er bekreftet | Permanent og samlet | Varig fullt skjema |
@@ -250,7 +252,7 @@ Feilvei: PDF-generering feiler → prøv igjen uten nye bekreftelser eller endri
 
 ## Responsive & Platform
 
-Mobilregistrering skal fungere uten horisontal rulling. Prosjekteiers valgte matrise viser kategorier vertikalt og, til høyre for radtekstene, OK / Kan bli bedre / Ikke relevant i denne rekkefølgen med overskrifter øverst. Større skjerm skal støtte samme oppgaver og innsyn. Desktop er ikke en egen rolle eller egen arbeidsflyt. Kolonnebredder, tekstbryting og bruddpunkter må prøves mot A7; 360/1280 CSS-piksler i PRD er forslag, ikke vedtatt testmatrise. Punkthjelpens spørsmålstegn og hjelpetekst er interaktive skjermdetaljer og utelates fra utskrift/PDF.
+Mobilregistrering skal fungere uten horisontal rulling. Prosjekteiers valgte matrise viser kategorier vertikalt og, til høyre for radtekstene, OK / Kan bli bedre / Ikke relevant i denne rekkefølgen med overskrifter øverst. Større skjerm skal støtte samme oppgaver og innsyn. Desktop er ikke en egen rolle eller egen arbeidsflyt. Kolonnebredder, tekstbryting og bruddpunkter prøves mot den godkjente A7-matrisen: 320/360/390/768/1280 CSS-piksler og øvrige betingelser i arkitekturens testplan. Punkthjelpens spørsmålstegn og hjelpetekst er interaktive skjermdetaljer og utelates fra utskrift/PDF.
 
 V1 bruker delt enhet. Ved rollebytte må sjåførflaten ikke beholde synlige fadderkommentarer fra forrige visning. Fremtidig egen enhet dagen før, synkronisering og produksjonstilgang krever senere arkitekturarbeid.
 
@@ -292,7 +294,7 @@ UX-L1 er også lukket: mobilmatrise, systemfont, farger, luft, logo, punkthjelp 
 
 | ID | Arkitekturoppgave | Eier / når |
 | --- | --- | --- |
-| A4 / A8 | Lagringsmekanisme, hva virker under nettbrudd, tidsmål og gjenopptakelsesbetingelser. | Arkitekt med prosjekteier før lagringshistorier |
-| A7 | Testbredder, nettlesere, tilgjengelighetsmål og faktiske kontrastkombinasjoner. | UX og arkitekt før implementeringsplan |
+| A4 / A8 | Godkjent 2026-11-05: lokal IndexedDB og betingelser/mål i AD-3/4. | Testes ved implementering, ingen ny eieravklaring |
+| A7 | Godkjent 2026-11-05: testmatrise og WCAG 2.2 AA-mål i AD-12/testplanen. | Testes ved implementering, ingen ny eieravklaring |
 
 Ingen av disse radene gjenåpner frivillighet, femdagersgrense, engangs-førvurdering, daglig relevansvalg, fadders tilgang underveis eller fullt innsyn ved avslutning. Detaljer skal ikke fylles med stiltiende antakelser.

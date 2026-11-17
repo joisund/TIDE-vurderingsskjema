@@ -1,0 +1,164 @@
+export type Role = 'fadder' | 'sjåfør'
+export type Actor = { id: string; role: Role }
+export type StartPlan = 1 | 2 | 3
+
+export type CreateRunFields = {
+  driverName: string
+  employeeNumber: string
+  mentorName: string
+  firstDate: string
+  initialLastDay: string
+}
+
+export type FieldErrors = Partial<Record<keyof CreateRunFields, string>>
+
+export type Criterion = { id: string; title: string; help: string }
+export type ContentSnapshot = {
+  criteriaVersion: string
+  ruleVersion: string
+  helpVersion: string
+  criteria: readonly Criterion[]
+}
+
+export type FirstDay = {
+  id: string
+  number: 1
+  date: string
+  driverId: string
+  mentorName: string
+  identityConfirmed: false
+}
+
+export type Run = {
+  id: string
+  revision: number
+  lifecycle: 'open'
+  driver: { id: string; name: string; employeeNumber: string }
+  initialLastDay: StartPlan
+  firstDay: FirstDay
+  content: ContentSnapshot
+}
+
+export type CreateRunCommand = {
+  commandId: string
+  runId: string
+  actor: Actor
+  expectedRevision: number
+  payload: CreateRunFields & { driverId: string; dayId: string }
+}
+
+export type RunReceipt = { runId: string; dayId: string; revision: number }
+
+export type ErrorCode =
+  | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale'
+  | 'command_conflict' | 'run_missing' | 'storage_open' | 'storage_read'
+  | 'storage_write' | 'storage_blocked' | 'schema_changed'
+  | 'unsupported_schema' | 'resource_load'
+
+export class AppError extends Error {
+  readonly code: ErrorCode
+  readonly fields: FieldErrors
+
+  constructor(code: ErrorCode, fields: FieldErrors = {}) {
+    super(code)
+    this.code = code
+    this.fields = fields
+  }
+}
+
+// Kriterium-ID-ene følger de 22 faste nummerposisjonene i PRD-addendumet (versjon 1).
+export const criterionIds: readonly string[] = Object.freeze(
+  Array.from({ length: 22 }, (_, index) => `criterion-${String(index + 1).padStart(2, '0')}`),
+)
+
+export function validateContent(content: ContentSnapshot): void {
+  const expected = new Set(criterionIds)
+  for (const criterion of content.criteria) {
+    if (!expected.delete(criterion.id) || !criterion.title.trim() || !criterion.help.trim()) {
+      throw new AppError('invalid_content')
+    }
+  }
+  if (expected.size || !content.criteriaVersion || !content.ruleVersion || !content.helpVersion) {
+    throw new AppError('invalid_content')
+  }
+}
+
+// Datoen er den valgte kalenderdatoen i Europe/Oslo. Den representeres aldri som et tidspunkt.
+export function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const monthLengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return year > 0 && month >= 1 && month <= 12 && day >= 1 && day <= monthLengths[month - 1]
+}
+
+function startPlanFrom(value: string): StartPlan | undefined {
+  switch (value) {
+    case '1': return 1
+    case '2': return 2
+    case '3': return 3
+  }
+}
+
+export function validateCreateRun(fields: CreateRunFields): FieldErrors {
+  const errors: FieldErrors = {}
+  if (!hasText(fields.driverName)) errors.driverName = 'Skriv inn sjåførens navn.'
+  if (!hasText(fields.employeeNumber)) errors.employeeNumber = 'Skriv inn ansattnummer.'
+  if (!hasText(fields.mentorName)) errors.mentorName = 'Skriv inn fadderens navn.'
+  if (!isCalendarDate(fields.firstDate)) errors.firstDate = 'Oppgi en gyldig første kalenderdato.'
+  if (!startPlanFrom(fields.initialLastDay)) errors.initialLastDay = 'Velg en startplan på én, to eller tre dager.'
+  return errors
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+export function isId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+export function validateCreateIds(command: CreateRunCommand) {
+  const ids = [command.commandId, command.runId, command.actor?.id, command.payload?.driverId, command.payload?.dayId]
+  if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length) {
+    throw new AppError('invalid_command')
+  }
+}
+
+export function validateSavedRun(run: Run) {
+  if (!isId(run?.id) || run.lifecycle !== 'open' || !isId(run.driver?.id)
+    || !hasText(run.driver.name) || !hasText(run.driver.employeeNumber)
+    || !isId(run.firstDay?.id) || run.firstDay.driverId !== run.driver.id || run.firstDay.number !== 1
+    || !hasText(run.firstDay.mentorName) || !isCalendarDate(run.firstDay.date)
+    || ![1, 2, 3].includes(run.initialLastDay)) {
+    throw new AppError('storage_read')
+  }
+}
+
+export function createRun(command: CreateRunCommand, content: ContentSnapshot): Run {
+  validateCreateIds(command)
+  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  if (command.expectedRevision !== 0) throw new AppError('stale')
+  const fields = command.payload
+  const errors = validateCreateRun(fields)
+  const initialLastDay = startPlanFrom(fields.initialLastDay)
+  if (Object.keys(errors).length || !initialLastDay) throw new AppError('validation', errors)
+  validateContent(content)
+
+  return {
+    id: command.runId,
+    revision: 1,
+    lifecycle: 'open',
+    driver: { id: fields.driverId, name: fields.driverName.trim(), employeeNumber: fields.employeeNumber.trim() },
+    initialLastDay,
+    firstDay: {
+      id: fields.dayId,
+      number: 1,
+      date: fields.firstDate,
+      driverId: fields.driverId,
+      mentorName: fields.mentorName.trim(),
+      identityConfirmed: false,
+    },
+    content: { ...content, criteria: content.criteria.map(criterion => ({ ...criterion })) },
+  }
+}

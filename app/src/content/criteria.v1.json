@@ -1,0 +1,112 @@
+[
+  {
+    "id": "criterion-01",
+    "title": "Korrekt uniform/hygiene",
+    "help": "Uniform og hygiene følger gjeldende rutiner. Vurder om fremtoning og klær er ryddige og egnet for arbeidsoppgaven."
+  },
+  {
+    "id": "criterion-02",
+    "title": "Selvinnsikt / Stress / Nervøsitet",
+    "help": "Vurder hvordan stress og usikkerhet håndteres, og om egne begrensninger gjenkjennes. Å si fra og bruke tilbakemeldinger er en del av dette."
+  },
+  {
+    "id": "criterion-03",
+    "title": "Kundebehandling / service",
+    "help": "Passasjerene møtes vennlig og respektfullt. Vurder om informasjonen er forståelig, og om ulike behov blir møtt uten at oppmerksomheten på kjøringen svekkes."
+  },
+  {
+    "id": "criterion-04",
+    "title": "Matpakke/drikke",
+    "help": "Mat og drikke planlegges ut fra arbeidsdagens varighet og avtalte pauser. Vurder om forberedelsene passer dagens arbeid."
+  },
+  {
+    "id": "criterion-05",
+    "title": "Teknisk kunnskap",
+    "help": "Punktet gjelder kjennskap til bussens betjening, funksjoner og varsler. Vurder forståelsen av utstyret og når kjøretøyets veiledning må brukes."
+  },
+  {
+    "id": "criterion-06",
+    "title": "Betjening av dører på holdeplasser",
+    "help": "Dørene betjenes etter opplært fremgangsmåte, med oversikt over passasjerer og området ved dørene. Noen passasjerer trenger mer tid."
+  },
+  {
+    "id": "criterion-07",
+    "title": "Billettering",
+    "help": "Billettering utføres etter gjeldende rutiner. Vurder korrekt håndtering av utstyret og tydelig veiledning når passasjeren har spørsmål."
+  },
+  {
+    "id": "criterion-08",
+    "title": "Språk / Kommentarkjøring",
+    "help": "Punktet gjelder forståelig norsk eller svensk i vanlig kommunikasjon. Kommentarkjøring vurderes der det brukes, men er ikke et krav etter opplæringen."
+  },
+  {
+    "id": "criterion-09",
+    "title": "Oppstart / daglig kontroll",
+    "help": "Oppstart og daglig kontroll følger gjeldende sjekkliste. Vurder om gjennomgangen er systematisk, og om avvik blir oppdaget og håndtert."
+  },
+  {
+    "id": "criterion-10",
+    "title": "Feilrapport i rapporteringsappen",
+    "help": "Feilrapporten knyttes til riktig kjøretøy og beskriver konkret hva som er observert. Vurder om informasjonen er forståelig for den som følger opp."
+  },
+  {
+    "id": "criterion-11",
+    "title": "Bruk av Sjåførkort",
+    "help": "Sjåførkortet er et personlig kort til fartsskriveren, bestilt fra Statens vegvesen. Vurder korrekt bruk og forståelse av registreringer og meldinger."
+  },
+  {
+    "id": "criterion-12",
+    "title": "Se-teknikk og VTL §3",
+    "help": "Vurder oversikten over trafikkbildet og hvordan mulige situasjoner oppdages. Oppmerksomhet og hensyn til andre skal komme frem i kjøringen."
+  },
+  {
+    "id": "criterion-13",
+    "title": "Bruk av microfon",
+    "help": "Mikrofonen brukes til relevant og forståelig informasjon. Vurder tydelig tale og tidspunktet for beskjeden, samtidig som oppmerksomheten på trafikken beholdes."
+  },
+  {
+    "id": "criterion-14",
+    "title": "Rygging",
+    "help": "Rygging krever planlegging, oversikt og kontroll. Vurder også kommunikasjonen dersom medhjelper brukes, og om usikker oversikt fører til stans og avklaring."
+  },
+  {
+    "id": "criterion-15",
+    "title": "Lover: Vikeplikt, forkjørs-vei, farts- og veimerking",
+    "help": "Vurder om regler, skilt og oppmerking oppfattes og følges i situasjonen. Valgene bør kunne forklares med utgangspunkt i gjeldende regelverk."
+  },
+  {
+    "id": "criterion-16",
+    "title": "Planlegging, tegn, signal og plassering",
+    "help": "Planlegging, tegn, signal og plassering skal gjøre kjøringen forståelig. Vurder sammenhengen mellom observasjonene, valgene og muligheten andre har til å tilpasse seg."
+  },
+  {
+    "id": "criterion-17",
+    "title": "Samhandling i rundkjøring og kryss",
+    "help": "Høyre felt brukes når kjøreretning, skilting og oppmerking tillater det. Vurder oversikt, plassbehov, hekksving og samhandling i rundkjøringer og kryss."
+  },
+  {
+    "id": "criterion-18",
+    "title": "Fartstilpasning og avstand til forankjørende",
+    "help": "Fart og avstand tilpasses trafikken og forholdene, innenfor fartsgrensen. Vurder sikkerhetsmargin, tidlig tilpasning og passasjerenes komfort."
+  },
+  {
+    "id": "criterion-19",
+    "title": "God flyt i nedoverbakke (utrulling / retarder)",
+    "help": "Vurder kontrollert fart i lange nedoverbakker og bruk av retarder ved utrulling, tilpasset føreforholdene og kjøretøyets instruks."
+  },
+  {
+    "id": "criterion-20",
+    "title": "God flyt inn mot og ut fra bussholdeplass",
+    "help": "Vurder rolig inn- og utkjøring og plassering nær fortauskanten for god av- og påstigning. Snøskavler og andre hindringer må hensyntas."
+  },
+  {
+    "id": "criterion-21",
+    "title": "Fart og plassering før, gjennom og etter sving",
+    "help": "Fart og plassering tilpasses hele svingen, innenfor fartsgrensen. Vurder oversikt, bussens plassbehov, hekksving og passasjerenes komfort."
+  },
+  {
+    "id": "criterion-22",
+    "title": "God flyt over fartsdumper",
+    "help": "Vurder om fartsdumpen oppdages i tide og passeres kontrollert. Passasjerenes opplevelse og bevegelsene i bussen er en del av vurderingen."
+  }
+]

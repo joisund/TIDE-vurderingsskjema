@@ -1,0 +1,58 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 11-17-2026 21:11
+last_updated: 11-17-2026 21:41
+project: Digital kjørevurdering
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: in-progress
+  1-1-sette-opp-prosjektet-fra-startmal-og-opprette-første-løp: review
+  1-2-registrere-og-bevare-dagens-øktopplysninger: backlog
+  1-3-fylle-ut-og-låse-sjåførens-førvurdering: backlog
+  1-4-fullføre-sjåførens-daglige-ettervurdering: backlog
+  1-5-registrere-faddervurdering-og-behandle-relevansvalg: backlog
+  1-6-planlegge-videre-oppfølging-og-siste-dag: backlog
+  1-7-bekrefte-fadderdelen-og-låse-dagen-permanent: backlog
+  1-8-fortsette-løpet-med-nye-dager-og-bevart-historikk: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-avslutte-perioden-og-åpne-fullt-innsyn: backlog
+  2-2-laste-ned-komplett-sluttdokumentasjon-som-pdf: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-bruke-felles-vurderingsskjema-som-instruktør-og-knytte-dokum: backlog
+  3-2-dokumentere-teknisk-opplæring-med-egen-bekreftelse-og-pdf: backlog
+  3-3-dokumentere-linjeopplæring-og-videreføre-bekreftet-historikk: backlog
+  epic-3-retrospective: optional

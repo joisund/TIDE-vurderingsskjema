@@ -53,6 +53,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
       const latest = await application.withOpenStorage(() => restoreRole
         ? application.changeRole(actor.role, selection)
         : application.read(selection))
+      if (latest.blocked) return { readError: new AppError('wrong_role') }
       if (!latest.selected) throw new AppError('storage_read')
       return { stored: { ...latest, selected: latest.selected } }
     } catch (error) {

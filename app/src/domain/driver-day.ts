@@ -6,7 +6,7 @@ import type { AnswerDraft, BaselineChanges, DriverAfterAnswer } from './baseline
 import { checkDayFields, dayDraft } from './day-draft.ts'
 import { currentPlan, plannedDayAt } from './follow-up.ts'
 import type { RunPlan } from './follow-up.ts'
-import { AppError, dayLocks, findDay, isConfirmationTime, replaceDay, runDays, validateContent } from './run.ts'
+import { AppError, assessmentContext, dayLocks, findDay, isConfirmationTime, replaceDay, runDays, validateContent } from './run.ts'
 import type { Actor, Day, Run } from './run.ts'
 
 export { currentPlan } from './follow-up.ts'
@@ -213,7 +213,7 @@ export function confirmDriverDay(run: Run, command: ConfirmDriverDayCommand): Ru
   const { day, plan, draft } = writableDriverDay(run, command)
   const fields = dayDraft(run, day)
   const answers = checkBaselineAnswers(draft.answers, day.number === 1 ? baselineOf(run).answers : undefined)
-  const issues: Record<string, string> = { ...checkDayFields(fields, 'driver'), ...answers }
+  const issues: Record<string, string> = { ...checkDayFields(fields, 'driver', assessmentContext(run)), ...answers }
   const offered = offersEvaluation(plan, day)
   const evaluation = snapshotEvaluation(day.id, day.date, plan.revision, offered, day.evaluationDraft)
   if (offered && evaluation.state === 'not_offered') issues.evaluation = 'Gå til egenevalueringen og velg om du vil sende den inn eller hoppe over.'

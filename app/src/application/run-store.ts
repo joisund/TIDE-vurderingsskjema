@@ -1,4 +1,6 @@
-import type { Actor, CreateRunCommand, Role, Run, RunReceipt } from '../domain/run.ts'
+import type {
+  Actor, CreateDriverCommand, CreateRunCommand, DriverReceipt, DriverReference, Role, Run, RunReceipt,
+} from '../domain/run.ts'
 import type { SaveDayDraftCommand } from '../domain/day-draft.ts'
 import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../domain/baseline.ts'
 import type { CreateDayCommand, CreateDayReceipt } from '../domain/create-day.ts'
@@ -8,11 +10,12 @@ import type { FollowUpReceipt, SaveFollowUpCommand } from '../domain/follow-up.t
 import type { CloseRunCommand, SaveConclusionCommand } from '../domain/closure.ts'
 
 export type Selection = { runId: string; dayId: string }
-export type Session = { actor: Actor; selection?: Selection }
-export type WorkspaceState = { session: Session; runs: Run[] }
+export type Session = { actor: Actor; selection?: Selection; driverId?: string }
+export type WorkspaceState = { session: Session; runs: Run[]; drivers: DriverReference[] }
 
 export interface RunStore {
   open(actors: Record<Role, string>): Promise<WorkspaceState>
+  createDriver(command: CreateDriverCommand, fingerprint: string): Promise<DriverReceipt>
   create(command: CreateRunCommand, fingerprint: string, buildRun: () => Run): Promise<RunReceipt>
   createDay(command: CreateDayCommand, fingerprint: string): Promise<CreateDayReceipt>
   saveDayDraft(command: SaveDayDraftCommand, fingerprint: string): Promise<RunReceipt>
@@ -29,5 +32,7 @@ export interface RunStore {
   read(selection?: Selection): Promise<WorkspaceState>
   readRun(runId: string): Promise<Run>
   select(runId: string, dayId?: string): Promise<WorkspaceState>
-  changeRole(role: Role, selection?: Selection): Promise<WorkspaceState>
+  showDrivers(): Promise<WorkspaceState>
+  selectDriver(driverId: string): Promise<WorkspaceState>
+  changeRole(role: Role, selection?: Selection | null): Promise<WorkspaceState>
 }

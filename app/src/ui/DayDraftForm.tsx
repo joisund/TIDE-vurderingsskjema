@@ -6,7 +6,7 @@ import type { DayField } from '../domain/day-draft.ts'
 import type { Actor } from '../domain/run.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
-import { AppError } from '../domain/run.ts'
+import { AppError, professionalTerms } from '../domain/run.ts'
 import { useDayDraft } from './use-day-draft.ts'
 
 export type DayDraftHandle = { flush: () => Promise<boolean> }
@@ -23,14 +23,13 @@ type Props = {
   fieldToFix?: DayField
 }
 
-const labels: Record<DayField, string> = {
-  driverName: 'Sjåførnavn', employeeNumber: 'Ansattnummer', mentorName: 'Faddernavn',
+const fieldLabels: Record<DayField, string> = {
+  driverName: 'Sjåførnavn', employeeNumber: 'Ansattnummer', mentorName: '',
   date: 'Dato', bus1: 'Buss 1', bus2: 'Buss 2', routes: 'Linjer', startTime: 'Inn-tid', endTime: 'Ut-tid',
 }
 
 const accessText = {
   editable: 'Redigerbar',
-  'read-only': 'Fadder redigerer',
   locked: 'Låst',
 } as const
 
@@ -44,19 +43,23 @@ function fieldHint(field: DayField) {
 }
 
 export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props) {
+  const context = options.initial.context
+  const professional = professionalTerms(context)
+  const labels = { ...fieldLabels, mentorName: `${professional.role}navn` }
   const editor = useDayDraft(options)
   const { draft, access, conflict, staleRole, conflictingLocks, editableConflictChanges, reviewing } = editor
   const [checking, setChecking] = useState(false)
   const heading = useRef<HTMLHeadingElement>(null)
   const snapshotHeading = useRef<HTMLHeadingElement>(null)
   const currentLocks = conflict?.stored?.selected ?? draft.saved
-  const driverIssues = { ...checkDayFields(draft.fields, 'driver'), ...editor.validation }
-  const lockIssues = checkDayFields(draft.fields, 'day-lock')
+  const driverIssues = { ...checkDayFields(draft.fields, 'driver', context), ...editor.validation }
+  const lockIssues = checkDayFields(draft.fields, 'day-lock', context)
   const issues = { ...lockIssues, ...editor.validation }
   const stopped = Boolean(draft.problem && !draft.writing)
   const status = stopped ? 'Ulagrede endringer' : editor.dirty || draft.writing ? 'Lagrer …' : 'Lagret på denne enheten'
   const disabled = draft.writing || navigating || reviewing
   const recoveryError = conflict?.readError ?? draft.problem?.error
+  const requiresRole = recoveryError instanceof AppError && recoveryError.code === 'wrong_role'
   const schemaError = recoveryError instanceof AppError
     && (recoveryError.code === 'schema_changed' || recoveryError.code === 'unsupported_schema')
   useImperativeHandle(ref, () => ({ flush: editor.flush }))
@@ -113,7 +116,7 @@ export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props)
                       snapshotHeading.current?.focus()
                       void editor.reloadConflict(true)
                     }}>
-                      {options.actor.role === 'fadder' ? 'Gjenoppta som fadder' : 'Gjenoppta som sjåfør'}
+                      Gjenoppta som {options.actor.role}
                     </button>
                   : <button type="button" className="button primary" disabled={disabled || conflictingLocks} onClick={() => {
                       heading.current?.focus()
@@ -136,9 +139,9 @@ export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props)
           ) : (
             <button type="button" className="button secondary" disabled={disabled} onClick={() => {
               snapshotHeading.current?.focus()
-              void editor.reloadConflict()
+              void editor.reloadConflict(requiresRole)
             }}>
-              Hent lagrede opplysninger
+              {requiresRole ? `Gjenoppta som ${options.actor.role}` : 'Hent lagrede opplysninger'}
             </button>
           )}
         </section>
@@ -168,7 +171,7 @@ export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props)
                       ? <CalendarDate value={value} />
                       : value || 'Tomt felt'}</p>
                   </div>}
-              <p className="hint" id={`${id}-hint`}>{accessText[access[field]]} · {hint}</p>
+              <p className="hint" id={`${id}-hint`}>{access[field] === 'read-only' ? `${professional.role} redigerer` : accessText[access[field]]} · {hint}</p>
               {issue && <p className="field-error" id={`${id}-error`}>{issue}</p>}
             </div>
           )

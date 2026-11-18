@@ -7,7 +7,7 @@ import type { AnswerValue } from '../../domain/baseline.ts'
 import type { ClosureSnapshot } from '../../domain/closure.ts'
 import { evaluationFields } from '../../domain/driver-day.ts'
 import { currentPlan, dailyFollowUp } from '../../domain/follow-up.ts'
-import { criterionIds, runDays } from '../../domain/run.ts'
+import { assessmentContext, criterionIds, professionalTerms, runDays } from '../../domain/run.ts'
 import type { Confirmation, Day, Run } from '../../domain/run.ts'
 
 export const pdfFont = 'Noto Sans'
@@ -175,6 +175,7 @@ function Header({ logo, title }: { logo: string; title: string }) {
 function Matrix({ logo, source, days, groups }: {
   logo: string; source: ClosureSnapshot; days: Day[]; groups: ReturnType<typeof matrixGroups>
 }) {
+  const professional = professionalTerms(assessmentContext(source.history))
   const [first] = days
   const dateRange = days.length === 1 ? dateText(first.date) : `${dateText(first.date)}–${dateText(days.at(-1)!.date)}`
   const columnWidth = (matrixWidth - numberWidth - titleWidth - grid.borderWidth) / (1 + 2 * days.length)
@@ -186,7 +187,7 @@ function Matrix({ logo, source, days, groups }: {
   const identity = name.length + employeeNumber.length < 60 ? `Sjåfør · ${name} · Ansattnummer ${employeeNumber}` : 'Sjåfør og tilhørighet · Se øktopplysninger'
   return (
     <Page size="A4" orientation="landscape" wrap={false} style={[styles.page, styles.landscape]}>
-      <Header logo={logo} title="Fadderskjema – vurderinger og progresjon" />
+      <Header logo={logo} title={`${professional.formTitle} – vurderinger og progresjon`} />
       <View style={styles.summary}>
         <View style={styles.summaryRow}>
           <Text>{identity}</Text>
@@ -199,7 +200,7 @@ function Matrix({ logo, source, days, groups }: {
       </View>
       <Text style={styles.legend}>
         OK = OK · KB = Kan bli bedre · IR = Ikke relevant (begrunnet).
-        Før, sjåfør etter og fadder er separate vurderinger. Se detaljsidene for begrunnelser og bekreftelser.
+        Før, sjåfør etter og {professional.roleLower} er separate vurderinger. Se detaljsidene for begrunnelser og bekreftelser.
       </Text>
       <View style={styles.matrix}>
         <View style={[styles.matrixRow, styles.groupCell]}>
@@ -213,7 +214,7 @@ function Matrix({ logo, source, days, groups }: {
         <View style={[styles.matrixRow, styles.groupCell]}>
           <Text style={[styles.cell, { width: numberWidth + titleWidth }]} />
           <Text style={[styles.cell, styles.centered, { width: columnWidth }]}>Sjåfør før</Text>
-          {days.flatMap(day => ['Sjåfør etter', 'Fadder'].map(role =>
+          {days.flatMap(day => ['Sjåfør etter', professional.role].map(role =>
             <Text key={`${day.id}/${role}`} style={[styles.cell, styles.centered, { width: columnWidth }]}>{role}</Text>,
           ))}
         </View>
@@ -253,7 +254,8 @@ function assessmentDetails(run: Run, day: Day): Detail[] {
     const context = `Dag ${day.number} · ${title}`
     const driverAnswer = after.get(id)!
     const mentorAnswer = mentor.get(id)!
-    const mentorName = mentorAnswer.actor!.name
+    const { name: mentorName, role } = mentorAnswer.actor!
+    const professional = professionalTerms(role)
     const driverName = day.driverConfirmation!.actor.name
     const review = reviews[id]
     const entries: DetailText[] = []
@@ -265,17 +267,17 @@ function assessmentDetails(run: Run, day: Day): Detail[] {
       const prior = review.answerRevision !== driverAnswer.answerRevision
       entries.push({
         context, label: prior ? 'Tidligere relevansavgjørelse' : 'Behandling av sjåførens relevans',
-        text: `${review.decision === 'accepted' ? 'Bekreftet' : 'Avslått'} av ${review.actor.name}, fadder.${prior ? ' Gjaldt en tidligere versjon av sjåførens svar.' : ''}`,
+        text: `${review.decision === 'accepted' ? 'Bekreftet' : 'Avslått'} av ${review.actor.name}, ${review.actor.role}.${prior ? ' Gjaldt en tidligere versjon av sjåførens svar.' : ''}`,
       })
-      if (review.rejectionComment) entries.push({ context, label: `Fadders avslagskommentar · ${review.actor.name}`, text: review.rejectionComment })
+      if (review.rejectionComment) entries.push({ context, label: `${professionalTerms(review.actor.role).authorPrefix} avslagskommentar · ${review.actor.name}`, text: review.rejectionComment })
     }
-    if (mentorAnswer.reason) entries.push({ context, label: `Fadders egen begrunnelse · ${mentorName}`, text: mentorAnswer.reason })
+    if (mentorAnswer.reason) entries.push({ context, label: `${professional.authorPrefix} egen begrunnelse · ${mentorName}`, text: mentorAnswer.reason })
     else if (mentorName !== day.mentorConfirmation!.actor.name) {
-      entries.push({ context, label: `Fadders svar · ${mentorName}`, text: answerLabels[mentorAnswer.value!] })
+      entries.push({ context, label: `${professional.authorPrefix} svar · ${mentorName}`, text: answerLabels[mentorAnswer.value!] })
     }
     if (reasonDrafts[id]?.trim()) entries.push({ context, label: 'Lagret begrunnelsesutkast', text: reasonDrafts[id] })
     if (rejectionDrafts[id]?.trim()) entries.push({ context, label: 'Lagret avslagsutkast', text: rejectionDrafts[id] })
-    if (comments[id]) entries.push({ context, label: `Fadderkommentar · ${comments[id].actor.name}`, text: comments[id].text })
+    if (comments[id]) entries.push({ context, label: `${professionalTerms(comments[id].actor.role).role}kommentar · ${comments[id].actor.name}`, text: comments[id].text })
     const reference = `Dag ${day.number} · Punkt ${criterionIds.indexOf(id) + 1}`
     assessments.push(...entries.map(entry => ({ ...entry, reference })))
   }
@@ -302,18 +304,19 @@ function Confirmations({ source, days }: { source: ClosureSnapshot; days: Day[] 
     { label: 'Førvurdering bekreftet av', confirmation: source.history.baselineConfirmation },
     ...days.map(day => ({ label: `Dag ${day.number} · Ettervurdering bekreftet av`, confirmation: day.driverConfirmation! })),
   ]
+  const { role } = professionalTerms(assessmentContext(source.history))
   const mentors = new Map<string, ConfirmLine[]>()
   for (const day of days) {
     const confirmation = day.mentorConfirmation!
     const { name } = confirmation.actor
     if (!mentors.has(name)) mentors.set(name, [])
-    mentors.get(name)!.push({ label: `Dag ${day.number} · Fadderens del bekreftet av`, confirmation })
+    mentors.get(name)!.push({ label: `Dag ${day.number} · ${professionalTerms(assessmentContext(source.history)).role}ens del bekreftet av`, confirmation })
   }
   const [mainMentor, ...otherMentors] = mentors.values()
   return (
     <View style={styles.confirmations}>
       {[
-        { role: 'Sjåfør', lines: driver }, { role: 'Fadder', lines: otherMentors.flat() }, { role: 'Fadder', lines: mainMentor },
+        { role: 'Sjåfør', lines: driver }, { role, lines: otherMentors.flat() }, { role, lines: mainMentor },
       ].map(({ role, lines }, index) => (
         <View key={index} style={index === 0 ? [styles.confirmation, styles.driverConfirmations] : styles.confirmation}>
           {lines.length > 0 && <Text style={styles.fieldLabel}>{role}</Text>}
@@ -330,6 +333,7 @@ function Confirmations({ source, days }: { source: ClosureSnapshot; days: Day[] 
 
 function detailContents(source: ClosureSnapshot, days: Day[]): Detail[] {
   const run = { ...source.history, lifecycle: 'closed' as const }
+  const professional = professionalTerms(assessmentContext(run))
   const details: Detail[] = []
   const baselineName = source.history.baselineConfirmation.actor.name
   const before = new Map(source.history.baseline.answers.map(answer => [answer.criterionId, answer]))
@@ -344,9 +348,9 @@ function detailContents(source: ClosureSnapshot, days: Day[]): Detail[] {
     const context = `${reference} · ${dateText(day.date)}`
     details.push(
       { text: context, heading: true },
-      { context, reference, text: `Sjåfør · ${driverIdentity!.name} · Ansattnummer ${driverIdentity!.employeeNumber} · Fadder · ${day.mentorName}` },
+      { context, reference, text: `Sjåfør · ${driverIdentity!.name} · Ansattnummer ${driverIdentity!.employeeNumber} · ${professional.role} · ${day.mentorName}` },
       { context, reference, text: `Buss · ${[session!.bus1, session!.bus2].filter(Boolean).join(', ')} · Linjer · ${session!.routes} · Inn-tid ${session!.startTime} · Ut-tid ${session!.endTime}` },
-      { reference, text: `Dagens oppfølging · ${followUpText(dailyFollowUp(run, day)?.choice)}` },
+      { reference, text: `Dagens oppfølging · ${followUpText(dailyFollowUp(run, day)?.choice, assessmentContext(run))}` },
       ...assessmentDetails(run, day), ...evaluationDetails(day),
     )
   }
@@ -356,16 +360,16 @@ function detailContents(source: ClosureSnapshot, days: Day[]): Detail[] {
   )
   if (run.planHistoryBase) details.push({ text: `Tidligere lagret plan · Dag ${run.planHistoryBase.lastDay} · Planversjon ${run.planHistoryBase.revision}` })
   for (const event of run.planEvents ?? []) {
-    const label = `Dag ${event.dayNumber} · ${dateText(event.date)} · ${event.actor.name}, fadder`
+    const label = `Dag ${event.dayNumber} · ${dateText(event.date)} · ${event.actor.name}, ${event.actor.role}`
     const planChange = event.oldLastDay === event.newLastDay
       ? `Planlagt siste dag uendret · Dag ${event.newLastDay}`
       : `Planlagt siste dag fra dag ${event.oldLastDay} til dag ${event.newLastDay}`
-    details.push({ label, context: 'Oppfølgingsplan', text: `${event.source === 'extension' ? 'Senere utvidelse · ' : ''}${followUpText(event.choice)} · ${planChange} · Planversjon ${event.planRevision}` })
+    details.push({ label, context: 'Oppfølgingsplan', text: `${event.source === 'extension' ? 'Senere utvidelse · ' : ''}${followUpText(event.choice, event.actor.role)} · ${planChange} · Planversjon ${event.planRevision}` })
   }
   details.push({ text: 'Konklusjon', heading: true })
-  if (source.conclusion.text) details.push({ context: 'Konklusjon', label: `Fadder · ${source.closedBy.actor.name}`, text: source.conclusion.text })
+  if (source.conclusion.text) details.push({ context: 'Konklusjon', label: `${professional.role} · ${source.closedBy.actor.name}`, text: source.conclusion.text })
   details.push(
-    { context: 'Konklusjon', text: `${conclusionLabels[source.conclusion.status]} · Avsluttet av ${source.closedBy.actor.name}, fadder · ${confirmationTime(source.closedBy.confirmedAt)}` },
+    { context: 'Konklusjon', text: `${conclusionLabels[source.conclusion.status]} · Avsluttet av ${source.closedBy.actor.name}, ${source.closedBy.actor.role} · ${confirmationTime(source.closedBy.confirmedAt)}` },
     { text: 'Bekreftelser – låste registreringer', heading: true },
     { node: <Confirmations source={source} days={days} /> },
     { text: 'Sjåførens bekreftelser gjelder egne vurderinger og eventuell egenevaluering.' },
@@ -434,7 +438,8 @@ function detailPages(details: Detail[]): DetailPage[] {
 }
 
 export function closureDocument({ logo, source }: { logo: string; source: ClosureSnapshot }) {
-  const days = runDays({ ...source.history, lifecycle: 'closed' })
+  const days = runDays(source.history)
+  const documentTitle = professionalTerms(assessmentContext(source.history)).formTitle
   const details = detailContents(source, days)
   assertGlyphs([
     ...source.history.content.criteria.map(criterion => criterion.title),
@@ -445,7 +450,7 @@ export function closureDocument({ logo, source }: { logo: string; source: Closur
   const groups = matrixGroups(source)
   const pages = detailPages(details)
   return (
-    <Document title="Fadderskjema – digital kjørevurdering" language="nb-NO">
+    <Document title={`${documentTitle} – digital kjørevurdering`} language="nb-NO">
       <Matrix logo={logo} source={source} days={days} groups={groups} />
       {pages.map(({ runningTitle, details }, index) => (
         <Page key={index} size="A4" style={runningTitle

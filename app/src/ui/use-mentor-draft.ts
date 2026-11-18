@@ -11,7 +11,7 @@ import { useAutosaveDeadline } from './use-autosave-deadline.ts'
 
 export type MentorView = DayView & { mentorDay: NonNullable<DayView['mentorDay']> }
 type Stored = WorkspaceView & { selected: DayView }
-type Problem = { error: unknown; savedPlan?: FollowUpReceipt; conflict?: { latest?: Stored; readError?: unknown } }
+type Problem = { error: unknown; savedPlan?: FollowUpReceipt; conflict?: { latest?: Stored; readError?: unknown; roleBlocked?: true } }
 // Null bevarer en uttrykkelig tømming av råteksten frem til kvittering.
 type Row = Omit<BaselineDraftRow, 'reasonDraft'> & { reasonDraft?: string | null }
 type ReviewAttempt = { id: string; input: ReviewInput; command?: ReviewRelevanceCommand }
@@ -144,6 +144,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       const latest = await application.withOpenStorage(() => restoreRole
         ? application.changeRole(actor.role, selection)
         : application.read(selection))
+      if (latest.blocked) return { readError: new AppError('wrong_role'), roleBlocked: true }
       if (latest.selected?.id !== selection.runId || latest.selected.dayId !== selection.dayId) throw new AppError('storage_read')
       return { latest: { ...latest, selected: latest.selected } }
     } catch (error) {
@@ -211,7 +212,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       draftAttempt.current = undefined
       const mentorDay = {
         ...saved.mentorDay,
-        ...applyMentorChanges(saved.mentorDay, command.payload.changes, { ...actor, role: 'fadder', name: saved.mentorDay.mentorName }),
+        ...applyMentorChanges(saved.mentorDay, command.payload.changes, { ...actor, role: saved.context, name: saved.mentorDay.mentorName }),
       }
       const rows = { ...current.current.rows }
       for (const [id, sent] of Object.entries(command.payload.changes.answers ?? {})) {
@@ -296,7 +297,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       const state = current.current
       if (state.problem || (reviewAttempt.current && !duringReview)) return false
       const changes = changesSince(state)
-      const proposal = previewFollowUp(state.saved.mentorDay.followUp.window, state.followUp)
+      const proposal = previewFollowUp(state.saved.mentorDay.followUp.window, state.followUp, state.saved.context)
       const choice = planAttempt.current?.payload.choice
         ?? (planChanged(state) && 'choice' in proposal ? proposal.choice : undefined)
       let writing: Promise<boolean>
@@ -326,7 +327,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       const { criterionId, answerId, answerRevision, decision, rejectionComment } = command.payload
       const previous = saved.mentorDay.relevance[criterionId]
       if (previous.state === 'not_applicable') throw new AppError('storage_read')
-      const mentorActor = { ...actor, role: 'fadder' as const, name: saved.mentorDay.mentorName }
+      const mentorActor = { ...actor, role: saved.context, name: saved.mentorDay.mentorName }
       const target = { answerId, answerRevision }
       const review: RelevanceReview = decision === 'accepted'
         ? { ...target, decision, actor: mentorActor } : { ...target, decision, rejectionComment, actor: mentorActor }
@@ -446,7 +447,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
     })
     onSaved(next.saved)
     if (!planChanged(current.current)
-      || 'choice' in previewFollowUp(selected.mentorDay.followUp.window, current.current.followUp)) await flush()
+      || 'choice' in previewFollowUp(selected.mentorDay.followUp.window, current.current.followUp, selected.context)) await flush()
   }
 
   async function refresh() {
@@ -480,7 +481,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
   const changes = changesSince(draft)
   const conflict = draft.problem?.conflict
   const planDirty = planChanged(draft)
-  const planPreview = previewFollowUp(draft.saved.mentorDay.followUp.window, draft.followUp)
+  const planPreview = previewFollowUp(draft.saved.mentorDay.followUp.window, draft.followUp, draft.saved.context)
   return {
     draft, changes, notice, conflict, reviewing, updateRows, updateText, flush, review, retry, refresh, refreshConflict, resolveConflict,
     readStored, adopt, accept, cleanSnapshot, restoreLock,

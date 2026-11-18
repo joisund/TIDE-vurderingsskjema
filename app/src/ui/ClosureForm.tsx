@@ -2,7 +2,7 @@ import { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { Ref } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { CloseRunCommand, ClosureIssue, ConclusionDraft, ConclusionStatus, SaveConclusionCommand } from '../domain/closure.ts'
-import { AppError, hasText } from '../domain/run.ts'
+import { AppError, hasText, professionalTerms } from '../domain/run.ts'
 import type { Actor } from '../domain/run.ts'
 import { explain } from './app-errors.ts'
 import { CalendarDate } from './CalendarDate.tsx'
@@ -98,6 +98,27 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
     }
   }
 
+  async function resumeDraftRole() {
+    if (checkingRef.current) return
+    checkingRef.current = true
+    setChecking(true)
+    try {
+      const latest = await application.withOpenStorage(() => application.changeRole(actor.role, selection))
+      const day = latest.selected
+      const state = current.current
+      if (day?.conclusion && day.revision === state.saved.revision && latest.actor.id === actor.id) {
+        publish({ ...state, saved: { ...day, conclusion: day.conclusion }, problem: undefined, conflict: undefined })
+        await flush()
+      } else publish({ ...state, conflict: { latest } })
+    } catch (error) {
+      report(error)
+      publish({ ...current.current, problem: explain(error) })
+    } finally {
+      checkingRef.current = false
+      setChecking(false)
+    }
+  }
+
   function schedule() {
     deadline.schedule(() => { void flush(false) })
   }
@@ -175,6 +196,10 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
       if (!await flush()) return
       const latest = await readStored()
       const day = latest.selected
+      if (latest.blocked) {
+        onStored(latest)
+        return
+      }
       if (!day) throw new AppError('storage_read')
       if (latest.actor.id !== actor.id || day.revision !== current.current.saved.revision || !day.conclusion) {
         onStored(latest)
@@ -243,6 +268,7 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
   const { saved, fields, problem, conflict, writing } = state
   const dirty = differs(fields, saved.conclusion.draft)
   const disabled = navigating || checking || Boolean(conflict)
+  const professional = professionalTerms(saved.context)
   const nameMissing = checked && !hasText(fields.mentorName)
   const statusMissing = checked && !fields.status
   const stored = conflict?.latest?.selected
@@ -268,7 +294,7 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
                     onClick={() => { if (!disabled) onIssue(issue) }}>
                     {section === 'baseline' ? 'Åpne førvurderingen'
                       : section === 'after' ? `Åpne ettervurdering for dag ${dayNumber}`
-                        : section === 'mentor' ? `Åpne faddervurdering for dag ${dayNumber}`
+                        : section === 'mentor' ? `Åpne ${professional.assessment} for dag ${dayNumber}`
                           : section === 'history' ? `Les låst historikk for dag ${dayNumber}`
                             : section === 'session' ? `Gå til feltet for dag ${dayNumber}` : 'Til dagsoversikten'}
                   </button>
@@ -280,17 +306,17 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
       </section>
       <div className="baseline-entry">
         <label className="field" htmlFor="closing-mentor">
-          Avsluttende faddernavn
+          Avsluttende {professional.roleLower}navn
           <input id="closing-mentor" ref={mentorName} value={fields.mentorName} required readOnly={disabled}
             aria-invalid={nameMissing || undefined} aria-describedby={nameMissing ? 'closing-name-error' : undefined}
             onChange={event => update('mentorName', event.currentTarget.value)} />
         </label>
-        {nameMissing && <p id="closing-name-error" className="field-error">Oppgi navnet på fadderen som avslutter perioden.</p>}
+        {nameMissing && <p id="closing-name-error" className="field-error">Oppgi navnet på {professional.definite} som avslutter perioden.</p>}
       </div>
       <section className="baseline-entry" aria-labelledby="conclusion-heading">
         <h2 id="conclusion-heading">Konklusjon</h2>
         <label className="field conclusion-text" htmlFor="conclusion-text">
-          Fadders oppsummering (valgfritt)
+          {professional.authorPrefix} oppsummering (valgfritt)
           <textarea id="conclusion-text" value={fields.text} readOnly={disabled} aria-describedby="conclusion-text-hint"
             onChange={event => update('text', event.currentTarget.value)} />
         </label>
@@ -318,6 +344,8 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
           <div className="field-check">
             <p>Ulagret tekst står i oppsummeringsfeltet. Du kan kopiere den før du åpner lagret tilstand.</p>
             {stored?.conclusion && <><p>Lagret oppsummering</p><p className="assessment-text">{stored.conclusion.draft.text || 'Tom'}</p></>}
+            {conflict.latest?.blocked && <button type="button" className="button secondary" aria-disabled={checking}
+              onClick={() => void resumeDraftRole()}>Gjenoppta som {professional.roleLower}</button>}
             <button type="button" className="button secondary" aria-disabled={checking} onClick={() => void openStored()}>
               {conflict.latest ? 'Åpne lagret tilstand' : 'Last inn lagret tilstand'}
             </button>
@@ -330,7 +358,7 @@ export function ClosureForm({ ref, initial, actor, application, navigating, repo
       {confirmation && reviewButton.current && (
         <Modal title="Avslutte perioden?" trigger={reviewButton.current} fallbackFocus={reviewButton}
           dismiss={cancel} blocking={closing}>
-          <p>Fadder · {confirmation.draft.mentorName.trim()} · {confirmation.date}</p>
+          <p>{professional.role} · {confirmation.draft.mentorName.trim()} · {confirmation.date}</p>
           <p>Konklusjon · <strong>{conclusionLabels[confirmation.draft.status]}</strong></p>
           <p>Perioden lukkes permanent, og konklusjonen låses.</p>
           <p>Ingen flere dager kan legges til. Sjåføren får tilgang til hele skjemaet.</p>

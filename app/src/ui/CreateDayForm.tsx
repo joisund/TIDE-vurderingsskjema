@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { CreateDayCommand, CreateDayFields, CreateDayReceipt } from '../domain/create-day.ts'
-import { AppError } from '../domain/run.ts'
+import { AppError, professionalTerms } from '../domain/run.ts'
 import type { Actor } from '../domain/run.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
@@ -16,7 +16,6 @@ type Props = {
   onCancel: () => void
 }
 
-const fieldLabels = { date: 'Dato', mentorName: 'Faddernavn' }
 const fieldsOrder = ['date', 'mentorName'] as const
 
 export function CreateDayForm({ day, actor, application, report, onWorkspace, onComplete, onCancel }: Props) {
@@ -26,6 +25,7 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
   const [receipt, setReceipt] = useState<CreateDayReceipt>()
   const inFlight = useRef(false)
   const attempt = useRef<CreateDayCommand>(undefined)
+  const professional = professionalTerms(day.context)
   const last = day.days.at(-1)!
   const existingDate = day.status !== 'Avsluttet' && day.days.some(item => item.date === fields.date)
   const blocked = !day.canCreateDay && !existingDate
@@ -53,7 +53,7 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
   function refresh(asMentor = false) {
     const selection = { runId: day.id, dayId: day.dayId }
     return application.withOpenStorage(() => asMentor
-      ? application.changeRole('fadder', selection)
+      ? application.changeRole(day.context, selection)
       : application.read(selection))
   }
 
@@ -61,7 +61,7 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
     void perform(async () => {
       let saved = receipt
       if (!saved) {
-        if (actor.role !== 'fadder' || blocked) return
+        if (actor.role !== day.context || blocked) return
         const previous = attempt.current
         const command = previous && previous.expectedRevision === day.revision && previous.actor.id === actor.id
           ? previous : application.newCreateDayCommand(actor, day, fields)
@@ -70,9 +70,10 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
           saved = await application.withOpenStorage(() => application.executeCreateDay(command))
           setReceipt(saved)
         } catch (failure) {
-          if (failure instanceof AppError && ['stale', 'command_conflict', 'locked', 'plan_required', 'day_limit'].includes(failure.code)) {
-            attempt.current = undefined
-            onWorkspace(await refresh())
+          if (failure instanceof AppError && ['stale', 'wrong_role', 'command_conflict', 'locked', 'plan_required', 'day_limit'].includes(failure.code)) {
+            const latest = await refresh()
+            if (!latest.blocked) attempt.current = undefined
+            onWorkspace(latest)
           }
           throw failure
         }
@@ -94,22 +95,22 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
         <p role="alert" className="error-panel">{receipt ? 'Dagen kunne ikke åpnes. ' : 'Endringene er ikke lagret. '}
           {error.code === 'stale' ? 'Løpet eller rollen ble endret i en annen fane. Kontroller gjeldende opplysninger før du prøver igjen.' : explain(error)}</p>
       )}
-      {!receipt && actor.role === 'fadder' && blocked && (
+      {!receipt && actor.role === day.context && blocked && (
         <p className="context">{day.status === 'Avsluttet' ? 'Løpet er avsluttet. Gå tilbake til dagsoversikten.'
           : day.days.length === 5 ? 'Fem dager er registrert. Velg en registrert dato eller gå tilbake til dagsoversikten.'
             : 'Alle dager i planen er registrert. Velg en registrert dato, eller gå tilbake til dagsoversikten for å utvide planen.'}</p>
       )}
       <form className="create-form" noValidate onSubmit={event => { event.preventDefault(); submit() }}>
-        {!receipt && actor.role === 'fadder' && (
+        {!receipt && actor.role === day.context && (
           <div className="form-fields">
             {fieldsOrder.map(field => {
               const id = `next-day-${field}`
               return (
                 <div key={field} className="field">
-                  <label htmlFor={id}>{fieldLabels[field]}</label>
+                  <label htmlFor={id}>{field === 'date' ? 'Dato' : `${professional.role}navn`}</label>
                   {field === 'date' && <p id="next-day-date-hint" className="hint">Bruk formatet ÅÅÅÅ-MM-DD.</p>}
                   <input id={id} type="text" autoComplete="off" spellCheck={false} required
-                    readOnly={pending || actor.role !== 'fadder'} value={fields[field]}
+                    readOnly={pending || actor.role !== day.context} value={fields[field]}
                     aria-invalid={Boolean(error?.fields[field])}
                     aria-describedby={[field === 'date' && 'next-day-date-hint', error?.fields[field] && `${id}-issue`].filter(Boolean).join(' ') || undefined}
                     onChange={event => {
@@ -125,14 +126,14 @@ export function CreateDayForm({ day, actor, application, report, onWorkspace, on
           </div>
         )}
         <div className="actions">
-          {actor.role === 'fadder' || receipt
+          {actor.role === day.context || receipt
             ? <button type="submit" className="button primary" disabled={pending || (!receipt && blocked)}>
                 {receipt || (existingDate && !day.canCreateDay) ? 'Åpne registrert dag' : error ? 'Prøv igjen' : 'Opprett dag'}
               </button>
             : <button type="button" className="button primary" disabled={pending}
-                onClick={() => void perform(async () => onWorkspace(await refresh(true)))}>Gjenoppta som fadder</button>}
+                onClick={() => void perform(async () => onWorkspace(await refresh(true)))}>Gjenoppta som {professional.roleLower}</button>}
           <button type="button" className="button secondary" disabled={pending} onClick={onCancel}>
-            {receipt || (actor.role === 'fadder' && blocked) ? 'Til dagsoversikten' : 'Avbryt'}
+            {receipt || (actor.role === day.context && blocked) ? 'Til dagsoversikten' : 'Avbryt'}
           </button>
         </div>
       </form>

@@ -52,7 +52,7 @@ a { color: var(--primary); }
 .logo { width: 76px; height: auto; margin-top: 4px; }
 .profile-context { flex: 1 1 12rem; min-width: 0; font-size: .875rem; }
 .app-name { font-weight: 650; line-height: 1.2; }
-.day-context { margin-top: 4px; }
+.day-context, .professional-context { margin-top: 4px; }
 .network-status { margin-top: 4px; font-size: .75rem; }
 
 .role {

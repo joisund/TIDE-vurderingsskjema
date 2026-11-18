@@ -7,17 +7,16 @@ import { checkDayFields, dayDraft } from './day-draft.ts'
 import { driverAfterOf, validateSavedDriverDays } from './driver-day.ts'
 import { dailyFollowUp, validateSavedPlan } from './follow-up.ts'
 import { reasonRequirement, validateReason } from './reason.ts'
-import { AppError, dayLocks, findDay, hasText, isConfirmationTime, isId, replaceDay, runDays, validateContent, validateSavedRun } from './run.ts'
-import type { Actor, Day, MentorConfirmation, Run, RunReceipt } from './run.ts'
+import { AppError, assertProfessionalRole, assessmentContext, dayLocks, isAssessmentContext, findDay, hasText, isConfirmationTime, isId, replaceDay, runDays, validateContent, validateSavedRun } from './run.ts'
+import type { Actor, AssessmentContext, Day, MentorConfirmation, ProfessionalActor, Run, RunReceipt } from './run.ts'
 
-type MentorActor = { role: 'fadder'; id: string; name: string }
-type MentorAnswer = Answer & { actor?: MentorActor }
+type MentorAnswer = Answer & { actor?: ProfessionalActor }
 type CriterionMap<T> = Partial<Record<string, T>>
-type MentorComment = { text: string; actor: MentorActor }
+type MentorComment = { text: string; actor: ProfessionalActor }
 export type ReviewTarget = { answerId: string; answerRevision: number }
 type ReviewChoice = { decision: 'accepted'; rejectionComment?: never } | { decision: 'rejected'; rejectionComment: string }
 export type ReviewInput = ReviewTarget & ReviewChoice
-export type RelevanceReview = ReviewInput & { actor: MentorActor }
+export type RelevanceReview = ReviewInput & { actor: ProfessionalActor }
 export type MentorDay = AnswerDraft<MentorAnswer> & {
   comments: CriterionMap<MentorComment>
   rejectionDrafts: CriterionMap<string>
@@ -72,6 +71,7 @@ export function driverRelevance(run: Run, day: Day): Record<string, RelevanceSta
 
 export function mentorAssessmentIssues(
   answers: readonly Answer[], relevance: Record<string, RelevanceStatus>, reasonDrafts: CriterionMap<string> = {},
+  context: AssessmentContext = 'fadder',
 ) {
   return answers.flatMap(({ criterionId, ...answer }) => {
     const issues: { criterionId: string; field: 'answer' | 'reason' | 'review'; message: string }[] = []
@@ -79,7 +79,7 @@ export function mentorAssessmentIssues(
     if (!validAnswerContent(answer) || (answer.value === null && draft && !validateReason(draft).valid)) {
       issues.push({ criterionId, field: 'reason', message: reasonRequirement })
     } else if (answer.value === null) {
-      issues.push({ criterionId, field: 'answer', message: 'Velg et faddersvar.' })
+      issues.push({ criterionId, field: 'answer', message: context === 'fadder' ? 'Velg et faddersvar.' : 'Velg et instruktørsvar.' })
     }
     const status = relevance[criterionId]
     if (status.state === 'pending') {
@@ -105,8 +105,8 @@ export function checkMentorDay(run: Run, day: Day) {
   validateAnswerSet(run, draft.answers, 'mentor', day.id)
   const baselineMissing = !firstDayCanDriveAfter(run) || before.some(answer => !validRecordedAnswer(answer))
   const driverAfterMissing = !day.driverConfirmation || after.some(answer => !validRecordedAnswer(answer))
-  const fields = checkDayFields(dayDraft(run, day), 'day-lock')
-  const assessment = mentorAssessmentIssues(draft.answers, driverRelevance(run, day), draft.reasonDrafts)
+  const fields = checkDayFields(dayDraft(run, day), 'day-lock', assessmentContext(run))
+  const assessment = mentorAssessmentIssues(draft.answers, driverRelevance(run, day), draft.reasonDrafts, assessmentContext(run))
   const followUpMissing = !dailyFollowUp(run, day)
   return {
     baselineMissing, driverAfterMissing, fields, assessment, followUpMissing,
@@ -118,13 +118,13 @@ function validateMentorAnswers(run: Run, day: Day, draft: MentorDay) {
   validateAnswerSet(run, draft.answers, 'mentor', day.id)
   const validAnswer = day.mentorConfirmation ? validRecordedAnswer : validAnswerContent
   if (draft.answers.some((answer, index) => answer.criterionId !== run.content.criteria[index].id
-    || !validAnswer(answer) || (answer.value !== null && !isMentorActor(answer.actor))
-    || (answer.actor !== undefined && !isMentorActor(answer.actor)))
+    || !validAnswer(answer) || (answer.value !== null && !isProfessionalActor(answer.actor, assessmentContext(run)))
+    || (answer.actor !== undefined && !isProfessionalActor(answer.actor, assessmentContext(run))))
     || !validReasonDrafts(draft.answers, draft.reasonDrafts)) throw new AppError('storage_read')
 }
 
-function isMentorActor(actor: MentorActor | undefined) {
-  return isId(actor?.id) && actor.role === 'fadder' && hasText(actor.name)
+function isProfessionalActor(actor: ProfessionalActor | undefined, context: AssessmentContext) {
+  return isId(actor?.id) && actor.role === context && hasText(actor.name)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -150,18 +150,18 @@ export function validateSavedMentorDays(run: Run) {
     if (!validReasonDrafts(draft.answers, draft.rejectionDrafts)) throw new AppError('storage_read')
     const ids = new Set(draft.answers.map(answer => answer.criterionId))
     for (const [id, comment] of Object.entries(draft.comments)) {
-      if (!ids.has(id) || typeof comment?.text !== 'string' || !isMentorActor(comment.actor)) throw new AppError('storage_read')
+      if (!ids.has(id) || typeof comment?.text !== 'string' || !isProfessionalActor(comment.actor, assessmentContext(run))) throw new AppError('storage_read')
     }
     for (const [id, review] of Object.entries(draft.reviews)) {
       const answer = day.driverAfterAnswers?.find(item => item.criterionId === id)
-      if (!answer || !review || !validReview(review, Boolean(day.mentorConfirmation)) || !isMentorActor(review.actor)
+      if (!answer || !review || !validReview(review, Boolean(day.mentorConfirmation)) || !isProfessionalActor(review.actor, assessmentContext(run))
         || review.answerId !== answer.id || review.answerRevision > answer.answerRevision
         || (review.answerRevision === answer.answerRevision && answer.value !== 'not_relevant')) {
         throw new AppError('storage_read')
       }
     }
     if (day.mentorConfirmation && (!driverReadyForMentorDay(run, day)
-      || !dailyFollowUp(run, day) || Object.keys(checkDayFields(dayDraft(run, day), 'day-lock')).length
+      || !dailyFollowUp(run, day) || Object.keys(checkDayFields(dayDraft(run, day), 'day-lock', assessmentContext(run))).length
       || Object.values(driverRelevance(run, day)).some(({ state }) => state === 'pending' || state === 'outdated'))) {
       throw new AppError('storage_read')
     }
@@ -172,7 +172,7 @@ function validateMentorCommand(command: MentorCommand, dayId: unknown) {
   const ids = [command.commandId, command.runId, command.actor?.id, dayId]
   if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length
     || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1) throw new AppError('invalid_command')
-  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  if (!isAssessmentContext(command.actor.role)) throw new AppError('wrong_role')
 }
 
 export function validateSaveMentorDay(command: SaveMentorDayCommand) {
@@ -201,6 +201,7 @@ export function validateConfirmMentorDayCommand(command: ConfirmMentorDayCommand
 }
 
 function writableMentorDay(run: Run, command: SaveMentorDayCommand | ReviewRelevanceCommand | ConfirmMentorDayCommand) {
+  const context = assertProfessionalRole(run, command.actor)
   if (command.runId !== run.id) throw new AppError('run_missing')
   if (command.expectedRevision !== run.revision) throw new AppError('stale')
   const day = findDay(run, command.payload.dayId)
@@ -211,7 +212,7 @@ function writableMentorDay(run: Run, command: SaveMentorDayCommand | ReviewRelev
   validateContent(run.content)
   const draft = mentorDayOf(run, day)
   validateMentorAnswers(run, day, draft)
-  const actor: MentorActor = { id: command.actor.id, role: 'fadder', name: day.mentorName }
+  const actor: ProfessionalActor = { id: command.actor.id, role: context, name: day.mentorName }
   return { day, draft, actor }
 }
 
@@ -241,7 +242,7 @@ export function updateMentorDay(run: Run, command: SaveMentorDayCommand): Run {
 }
 
 export function applyMentorChanges(
-  draft: Omit<MentorDay, 'reviews'>, { answers, comments, rejectionDrafts }: MentorDayChanges, actor: MentorActor,
+  draft: Omit<MentorDay, 'reviews'>, { answers, comments, rejectionDrafts }: MentorDayChanges, actor: ProfessionalActor,
 ) {
   const applied = answers ? applyBaselineChanges(draft, answers) : draft
   const savedComments = { ...draft.comments }

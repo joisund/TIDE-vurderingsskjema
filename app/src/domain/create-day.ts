@@ -2,7 +2,7 @@ import { dayDraft } from './day-draft.ts'
 import { driverAfterOf } from './driver-day.ts'
 import { currentPlan } from './follow-up.ts'
 import { mentorDayOf } from './mentor-day.ts'
-import { AppError, hasText, isCalendarDate, isId, runDays, validateContent } from './run.ts'
+import { AppError, assertProfessionalRole, hasText, isAssessmentContext, professionalTerms, isCalendarDate, isId, runDays, validateContent } from './run.ts'
 import type { Actor, Day, Run, RunReceipt } from './run.ts'
 
 export type CreateDayFields = { date: string; mentorName: string }
@@ -24,11 +24,12 @@ export function validateCreateDayCommand(command: CreateDayCommand) {
     || Object.keys(payload).some(key => !['dayId', 'date', 'mentorName'].includes(key))) {
     throw new AppError('invalid_command')
   }
-  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  if (!isAssessmentContext(command.actor.role)) throw new AppError('wrong_role')
 }
 
 export function createDay(run: Run, command: CreateDayCommand) {
   validateCreateDayCommand(command)
+  const context = assertProfessionalRole(run, command.actor)
   if (run.id !== command.runId) throw new AppError('run_missing')
   if (run.lifecycle !== 'open') throw new AppError('locked')
   const { date, dayId, mentorName } = command.payload
@@ -51,7 +52,7 @@ export function createDay(run: Run, command: CreateDayCommand) {
     throw new AppError<CreateDayFields>('validation', { date: 'Velg en dato etter siste registrerte dato.' })
   }
   if (!hasText(mentorName)) {
-    throw new AppError<CreateDayFields>('validation', { mentorName: 'Skriv inn fadderens navn.' })
+    throw new AppError<CreateDayFields>('validation', { mentorName: `Skriv inn ${professionalTerms(context).possessive} navn.` })
   }
   const { driverName: name, employeeNumber } = dayDraft(run, run.firstDay)
   if (!hasText(name) || !hasText(employeeNumber)) throw new AppError('driver_identity_required')

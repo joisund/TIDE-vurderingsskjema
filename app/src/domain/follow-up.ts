@@ -1,9 +1,8 @@
-import { AppError, dayLocks, findDay, hasText, isCalendarDate, isId, runDays } from './run.ts'
-import type { Actor, Day, Run, RunReceipt } from './run.ts'
+import { AppError, assertProfessionalRole, assessmentContext, dayLocks, isAssessmentContext, professionalTerms, findDay, hasText, isCalendarDate, isId, runDays } from './run.ts'
+import type { Actor, AssessmentContext, Day, ProfessionalActor, Run, RunReceipt } from './run.ts'
 
 export type RunPlan = { revision: number; lastDay: Day['number'] }
 export type FollowUpChoice = { kind: 'none' } | { kind: 'training' } | { kind: 'days'; extraDays: number }
-type MentorActor = Actor & { role: 'fadder'; name: string }
 export type FollowUpDecision = {
   id: string
   dayId: string
@@ -15,7 +14,7 @@ export type PlanEvent = {
   dayId: string
   dayNumber: Day['number']
   date: string
-  actor: MentorActor
+  actor: ProfessionalActor
   commandId: string
   oldLastDay: Day['number']
   newLastDay: Day['number']
@@ -120,10 +119,10 @@ export function followUpInput(choice?: FollowUpChoice): FollowUpInput {
   }
 }
 
-export function previewFollowUp(window: PlanWindow, input: FollowUpInput): FollowUpPreview {
+export function previewFollowUp(window: PlanWindow, input: FollowUpInput, context: AssessmentContext = 'fadder'): FollowUpPreview {
   if (input.need === '') return { field: 'need', message: 'Velg Ja eller Nei.' } as const
   if (input.need === 'no') return projectChoice(window, { kind: 'none' })
-  if (input.type === '') return { field: 'type', message: 'Velg flere fadderdager eller utvidet kjøretrening.' } as const
+  if (input.type === '') return { field: 'type', message: `Velg flere ${professionalTerms(context).days} eller utvidet kjøretrening.` } as const
   if (input.type === 'training') return projectChoice(window, { kind: 'training' })
   if (!/^[1-9]\d*$/.test(input.extraDays)) return { field: 'extraDays', message: 'Velg antall ekstra dager.' } as const
   return projectChoice(window, { kind: 'days', extraDays: Number(input.extraDays) })
@@ -151,12 +150,13 @@ export function validateFollowUpCommand(command: SaveFollowUpCommand) {
     || Object.keys(payload).some(key => !['dayId', 'source', 'choice'].includes(key))) {
     throw new AppError('invalid_command')
   }
-  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  if (!isAssessmentContext(command.actor.role)) throw new AppError('wrong_role')
   if (payload.source === 'extension' && payload.choice.kind !== 'days') throw new AppError('validation')
 }
 
 export function saveFollowUp(run: Run, command: SaveFollowUpCommand): Run {
   validateFollowUpCommand(command)
+  const context = assertProfessionalRole(run, command.actor)
   if (command.runId !== run.id) throw new AppError('run_missing')
   if (command.expectedRevision !== run.revision) throw new AppError('stale')
   const { dayId, source, choice } = command.payload
@@ -178,7 +178,7 @@ export function saveFollowUp(run: Run, command: SaveFollowUpCommand): Run {
   const revision = previousPlan.revision + 1
   const event: PlanEvent = {
     decisionId: decision.id, dayId, dayNumber: day.number, date: day.date, source, choice,
-    actor: { id: command.actor.id, role: 'fadder', name: day.mentorName }, commandId: command.commandId,
+    actor: { id: command.actor.id, role: context, name: day.mentorName }, commandId: command.commandId,
     oldLastDay: previousPlan.lastDay, newLastDay: lastDay, planRevision: revision,
   }
   return {
@@ -212,7 +212,7 @@ export function validateSavedPlan(run: Run) {
   for (const event of events) {
     const day = event && findDay(run, event.dayId)
     if (!day || day.number !== event.dayNumber || !isCalendarDate(event.date) || !isId(event.actor?.id)
-      || event.actor.role !== 'fadder' || !hasText(event.actor.name) || !isId(event.decisionId)
+      || event.actor.role !== assessmentContext(run) || !hasText(event.actor.name) || !isId(event.decisionId)
       || !isId(event.commandId) || commandIds.has(event.commandId) || !validChoice(event.choice)
       || ![1, 2, 3, 4, 5].includes(event.oldLastDay) || ![1, 2, 3, 4, 5].includes(event.newLastDay)
       || event.oldLastDay < day.number || event.newLastDay < day.number

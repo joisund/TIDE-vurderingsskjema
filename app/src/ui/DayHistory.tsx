@@ -2,6 +2,7 @@ import type { DayView, HistoryDay } from '../application/run-application.ts'
 import type { DownloadRunPdf } from '../application/run-pdf.ts'
 import type { Answer } from '../domain/baseline.ts'
 import { evaluationFields } from '../domain/driver-day.ts'
+import { professionalTerms } from '../domain/run.ts'
 import type { Confirmation } from '../domain/run.ts'
 import { CalendarDate, ConfirmationTime } from './CalendarDate.tsx'
 import { FollowUpText, PlanHistory } from './FollowUpForm.tsx'
@@ -9,6 +10,7 @@ import { answerLabels, conclusionLabels, evaluationLabels } from './assessment-f
 import { RunPdfDownload } from './RunPdfDownload.tsx'
 
 export function DayTimeline({ day, busy, onSelect }: { day: DayView; busy: boolean; onSelect: (id: string) => void }) {
+  const professional = professionalTerms(day.context)
   return (
     <section className="baseline-entry" aria-labelledby="day-history-heading">
       <h2 id="day-history-heading">Registrerte dager</h2>
@@ -22,8 +24,8 @@ export function DayTimeline({ day, busy, onSelect }: { day: DayView; busy: boole
               ? <p>Ettervurdering bekreftet av {item.driverConfirmation.actor.name}, sjåfør.</p>
               : <p>Ettervurdering ikke bekreftet.</p>}
             {day.mentorDay && (item.mentorConfirmation
-              ? <p>Faddervurdering bekreftet av {item.mentorConfirmation.actor.name}, fadder.</p>
-              : <p>Faddervurdering ikke bekreftet.</p>)}
+              ? <p>{day.context === 'instruktør' ? 'Instruktørens del' : 'Faddervurdering'} bekreftet av {item.mentorConfirmation.actor.name}, {item.mentorConfirmation.actor.role}.</p>
+              : <p>{professional.role}vurdering ikke bekreftet.</p>)}
             {item.id !== day.dayId && (
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => onSelect(item.id)}>Åpne dag {item.number}</button>
@@ -52,6 +54,7 @@ function AnswerSummary({ answer }: { answer: Answer }) {
 
 export function DayHistory({ day, full = false }: { day: HistoryDay; full?: boolean }) {
   const { baseline, driverAfter, mentorDay, fields } = day
+  const professional = professionalTerms(day.context)
   const evaluation = driverAfter?.evaluation
   const evaluationDraft = driverAfter?.evaluationDraft
   const evaluationTexts = evaluation?.texts ?? evaluationDraft?.texts
@@ -70,7 +73,7 @@ export function DayHistory({ day, full = false }: { day: HistoryDay; full?: bool
       <dl className="details">
         <div><dt>Sjåfør</dt><dd>{fields.driverName || 'Ubesvart'}</dd></div>
         <div><dt>Ansattnummer</dt><dd>{fields.employeeNumber || 'Ubesvart'}</dd></div>
-        <div><dt>Fadder</dt><dd>{fields.mentorName || 'Ubesvart'}</dd></div>
+        <div><dt>{professional.role}</dt><dd>{fields.mentorName || 'Ubesvart'}</dd></div>
         <div><dt>Buss</dt><dd>{[fields.bus1, fields.bus2].filter(Boolean).join(', ') || 'Ubesvart'}</dd></div>
         <div><dt>Linjer</dt><dd>{fields.routes || 'Ubesvart'}</dd></div>
         <div><dt>Inn-tid</dt><dd>{fields.startTime || 'Ubesvart'}</dd></div>
@@ -88,9 +91,11 @@ export function DayHistory({ day, full = false }: { day: HistoryDay; full?: bool
         : <p>Ettervurderingen åpner når førvurderingen er bekreftet.</p>}
       {mentorDay && (
         <>
-          <h3>Faddervurdering · Dag {day.day}</h3>
-          <PartState confirmation={mentorDay.confirmation} />
-          <p>Dagens oppfølging · <FollowUpText choice={mentorDay.followUp.decision?.choice} /></p>
+          <h3>{professional.role}vurdering · Dag {day.day}</h3>
+          {mentorDay.confirmation?.actor.role === 'instruktør'
+            ? <p>Instruktørens del bekreftet av {mentorDay.confirmation.actor.name} · <ConfirmationTime value={mentorDay.confirmation.confirmedAt} /></p>
+            : <PartState confirmation={mentorDay.confirmation} />}
+          <p>Dagens oppfølging · <FollowUpText choice={mentorDay.followUp.decision?.choice} context={day.context} /></p>
           {!full && <PlanHistory history={mentorDay.followUp.history} />}
         </>
       )}
@@ -132,20 +137,20 @@ export function DayHistory({ day, full = false }: { day: HistoryDay; full?: bool
                   {!full && <div><dt>Sjåfør før · Dag 1</dt><dd><AnswerSummary answer={before} /></dd></div>}
                   {after && <div><dt>Sjåfør etter · Dag {day.day}</dt><dd><AnswerSummary answer={after} />
                     {after.locked && <p>Videreført fra førvurderingen.</p>}</dd></div>}
-                  {mentor && <div><dt>Fadder · Dag {day.day}</dt><dd><AnswerSummary answer={mentor} />
-                    {mentor.actor && <p>Fadders svar · {mentor.actor.name}</p>}
+                  {mentor && <div><dt>{professional.role} · Dag {day.day}</dt><dd><AnswerSummary answer={mentor} />
+                    {mentor.actor && <p>{professional.authorPrefix} svar · {mentor.actor.name}</p>}
                     {mentorDay?.reasonDrafts[id]?.trim() && <p className="assessment-text">Lagret begrunnelsesutkast · {mentorDay.reasonDrafts[id]}</p>}
                     {mentorDay?.rejectionDrafts[id]?.trim() && <p className="assessment-text">Lagret avslagsutkast · {mentorDay.rejectionDrafts[id]}</p>}
                   </dd></div>}
-                  {comment && <div><dt>Kommentar · {comment.actor.name}, fadder</dt>
+                  {comment && <div><dt>Kommentar · {comment.actor.name}, {comment.actor.role}</dt>
                     <dd className="assessment-text">{comment.text}</dd></div>}
                   {relevance && relevance.state !== 'not_applicable' && (
                     <div>
                       <dt>Behandling av sjåførens relevans</dt>
                       <dd>{'review' in relevance ? (
                         <>
-                          {relevance.state === 'accepted' ? 'Bekreftet' : 'Avslått'} av {relevance.review.actor.name}, fadder.
-                          {relevance.review.rejectionComment && <p className="assessment-text">Fadders avslagskommentar · {relevance.review.rejectionComment}</p>}
+                          {relevance.state === 'accepted' ? 'Bekreftet' : 'Avslått'} av {relevance.review.actor.name}, {relevance.review.actor.role}.
+                          {relevance.review.rejectionComment && <p className="assessment-text">{professional.authorPrefix} avslagskommentar · {relevance.review.rejectionComment}</p>}
                         </>
                       ) : relevance.state === 'pending' ? 'Ubehandlet' : 'Må behandles på nytt'}</dd>
                     </div>
@@ -154,9 +159,9 @@ export function DayHistory({ day, full = false }: { day: HistoryDay; full?: bool
                     <div>
                       <dt>Tidligere relevansavgjørelse</dt>
                       <dd>
-                        {priorReview.decision === 'accepted' ? 'Bekreftet' : 'Avslått'} av {priorReview.actor.name}, fadder.
+                        {priorReview.decision === 'accepted' ? 'Bekreftet' : 'Avslått'} av {priorReview.actor.name}, {priorReview.actor.role}.
                         {' '}Gjaldt en tidligere versjon av sjåførens svar.
-                        {priorReview.rejectionComment && <p className="assessment-text">Fadders avslagskommentar · {priorReview.rejectionComment}</p>}
+                        {priorReview.rejectionComment && <p className="assessment-text">{professional.authorPrefix} avslagskommentar · {priorReview.rejectionComment}</p>}
                       </dd>
                     </div>
                   )}
@@ -185,8 +190,8 @@ export function ClosedHistory({ day, busy, downloadRunPdf, report }: {
         <h2 id="closed-conclusion-heading">Konklusjon</h2>
         <p><strong>{conclusionLabels[closed.conclusion.status]}</strong></p>
         {closed.conclusion.text && <p className="assessment-text">{closed.conclusion.text}</p>}
-        <p>Avsluttet av {closed.closedBy.actor.name}, fadder · <ConfirmationTime value={closed.closedBy.confirmedAt} /></p>
-        <p>Hele skjemaet er tilgjengelig for sjåføren og fadderen.</p>
+        <p>Avsluttet av {closed.closedBy.actor.name}, {closed.closedBy.actor.role} · <ConfirmationTime value={closed.closedBy.confirmedAt} /></p>
+        <p>Hele skjemaet er tilgjengelig for sjåføren og {professionalTerms(day.context).definite}.</p>
         <RunPdfDownload runId={day.id} busy={busy} downloadRunPdf={downloadRunPdf} report={report} />
       </section>
       <section className="baseline-entry" aria-labelledby="closed-plan-heading">

@@ -5,8 +5,10 @@ import type { DownloadRunPdf } from '../application/run-pdf.ts'
 import type { DayField } from '../domain/day-draft.ts'
 import type { ClosureIssue } from '../domain/closure.ts'
 import { availableExtraDays } from '../domain/follow-up.ts'
-import { AppError, validateCreateRun } from '../domain/run.ts'
-import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
+import { AppError, isRole, professionalTerms, validateCreateRun, validateDriverFields } from '../domain/run.ts'
+import type {
+  CreateDriverCommand, CreateRunCommand, CreateRunFields, DriverFields, DriverReference, FieldErrors, Role, RunReceipt,
+} from '../domain/run.ts'
 import { CreateRunForm } from './CreateRunForm.tsx'
 import { CreateDayForm } from './CreateDayForm.tsx'
 import { ExtendRunForm } from './ExtendRunForm.tsx'
@@ -18,9 +20,10 @@ import { MentorAssessmentForm } from './MentorAssessmentForm.tsx'
 import type { MentorAssessmentHandle } from './MentorAssessmentForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 import { ClosureForm } from './ClosureForm.tsx'
+import { CreateDriverForm, InstructorOverview } from './InstructorOverview.tsx'
 
 type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend' | 'closure'
-type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | DayScreen
+type Screen = 'loading' | 'unavailable' | 'runs' | 'drivers' | 'create-driver' | 'create' | 'context-required' | DayScreen
 type RoleRestore = 'checking' | 'read-error' | 'local-draft'
 type Props = {
   application: RunApplication
@@ -31,7 +34,7 @@ type Props = {
   report: (error: unknown) => void
 }
 
-const roleName = { fadder: 'Fadder', sjåfør: 'Sjåfør' } as const
+const roleName: Record<Role, string> = { fadder: 'Fadder', sjåfør: 'Sjåfør', instruktør: 'Instruktør' }
 const emptyFields: CreateRunFields = {
   driverName: '', employeeNumber: '', mentorName: '', firstDate: '', initialLastDay: '3',
 }
@@ -39,6 +42,9 @@ const headings: Record<Screen, string> = {
   loading: 'Løpsoversikt',
   unavailable: 'Løpsoversikten er utilgjengelig',
   runs: 'Løpsoversikt',
+  drivers: 'Instruktøroversikt',
+  'create-driver': 'Opprett sjåfør',
+  'context-required': 'Velg rolle for vurderingen',
   create: 'Opprett løp',
   day: 'Dagsoversikt',
   baseline: 'Førvurdering',
@@ -50,6 +56,15 @@ const headings: Record<Screen, string> = {
   closure: 'Avslutt perioden',
 }
 
+function overviewScreen(view: WorkspaceView) {
+  return view.actor.role === 'instruktør' ? 'drivers' : 'runs'
+}
+
+function initialScreen(view: WorkspaceView) {
+  if (view.blocked) return 'context-required'
+  return view.selected ? 'day' : overviewScreen(view)
+}
+
 export function App({ application, downloadRunPdf, logo, prepare, requestPersistence, report }: Props) {
   const [screen, setScreen] = useState<Screen>('loading')
   const [view, setView] = useState<WorkspaceView>()
@@ -59,10 +74,15 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   const [errors, setErrors] = useState<FieldErrors>({})
   const [problem, setProblem] = useState<AppError>()
   const [receipt, setReceipt] = useState<RunReceipt>()
+  const [runDriver, setRunDriver] = useState<DriverReference>()
+  const [driverFields, setDriverFields] = useState<DriverFields>({ driverName: '', employeeNumber: '' })
+  const [driverErrors, setDriverErrors] = useState<FieldErrors<DriverFields>>({})
+  const [savedDriverId, setSavedDriverId] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [storageStatus, setStorageStatus] = useState('')
   const [navigationError, setNavigationError] = useState('')
   const [roleRestore, setRoleRestore] = useState<RoleRestore>()
+  const [selectingDriver, setSelectingDriver] = useState(false)
   const [dayEditorGeneration, setDayEditorGeneration] = useState(0)
   const [closureEditorGeneration, setClosureEditorGeneration] = useState(0)
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -71,16 +91,28 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   const focusDayField = useRef<DayField>(undefined)
   const roleSelect = useRef<HTMLSelectElement>(null)
   const cachedDialog = useRef<{ element: HTMLDialogElement; focus: Element | null }>(undefined)
+  const recoverySelection = useRef<{ runId: string; dayId: string }>(undefined)
+  const checkingRole = useRef(false)
   const inFlight = useRef(false)
   const attempt = useRef<{ fields: CreateRunFields; command: CreateRunCommand }>(undefined)
+  const driverAttempt = useRef<{ fields: DriverFields; command: CreateDriverCommand }>(undefined)
   const heading = useRef<HTMLHeadingElement>(null)
   const focusHeading = useRef(false)
   const persistenceRequested = useRef(false)
   const initialization = useRef<Promise<WorkspaceView>>(undefined)
-  const selected = screen === 'loading' || screen === 'unavailable' || screen === 'runs' || screen === 'create' ? undefined : view?.selected
+  const retryDrivers = useRef(false)
+  const overview = screen === 'runs' || screen === 'drivers'
+  const showingDay = !overview && !['loading', 'unavailable', 'create', 'create-driver', 'context-required'].includes(screen)
+  const selected = showingDay ? view?.selected : undefined
+  const blockedRun = screen === 'context-required' ? view?.blocked : undefined
+  const professional = professionalTerms(selected?.context ?? blockedRun?.context ?? 'fadder')
+  const createContext = runDriver ? 'instruktør' : 'fadder'
+  const instructorCreation = screen === 'create-driver' || (screen === 'create' && Boolean(runDriver))
   const dayCommandForm = screen === 'create-day' || screen === 'extend'
-  const draftRole = dayCommandForm ? 'fadder' : (view?.actor.role ?? 'fadder')
-  const guardedScreen = dayCommandForm || screen === 'mentor' || screen === 'history' || screen === 'day' || screen === 'closure'
+  const draftRole = dayCommandForm ? (selected?.context ?? 'fadder') : (view?.actor.role ?? 'fadder')
+  const guardedScreen = showingDay || overview || instructorCreation || screen === 'context-required'
+  const instructorProtected = guardedScreen && (view?.actor.role === 'instruktør'
+    || selected?.context === 'instruktør' || blockedRun?.context === 'instruktør')
 
   const accept = useCallback((data: WorkspaceView) => {
     setView(data)
@@ -104,7 +136,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     void initialization.current.then(data => {
       if (!active) return
       accept(data)
-      setScreen(data.selected ? 'day' : 'runs')
+      setScreen(initialScreen(data))
     }, error => {
       if (active) fail(error, true)
     })
@@ -161,9 +193,12 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     void perform(async () => {
       setScreen('loading')
       try {
-        const data = await prepare()
+        const opened = await prepare()
+        const data = retryDrivers.current && opened.actor.role === 'instruktør'
+          ? await application.showDrivers() : opened
+        retryDrivers.current = false
         accept(data)
-        navigate(data.selected ? 'day' : 'runs')
+        navigate(initialScreen(data))
       } catch (error) {
         focusHeading.current = true
         fail(error, true)
@@ -171,9 +206,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     })
   }
 
-  function newRun() {
-    if (inFlight.current || view?.actor.role !== 'fadder') return
-    setFields(emptyFields)
+  function newRun(driver?: DriverReference) {
+    if (inFlight.current || view?.actor.role !== (driver ? 'instruktør' : 'fadder')) return
+    setRunDriver(driver)
+    setFields(driver ? { ...emptyFields, driverName: driver.name, employeeNumber: driver.employeeNumber } : emptyFields)
     setErrors({})
     setProblem(undefined)
     setReceipt(undefined)
@@ -198,11 +234,18 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        setView(await application.withOpenStorage(() => application.read()))
+        const latest = await application.withOpenStorage(() => view?.actor.role === 'instruktør'
+          ? application.showDrivers() : application.read())
+        if (latest.actor.id !== view?.actor.id) replaceRoleView(latest)
+        else setView(latest)
         setStorageStatus('')
-        navigate('runs')
+        navigate(overviewScreen(latest))
       } catch (error) {
-        if (selected) {
+        if (view?.actor.role === 'instruktør') {
+          retryDrivers.current = true
+          focusHeading.current = true
+          fail(error)
+        } else if (selected) {
           report(error)
           setNavigationError('Løpsoversikten kunne ikke åpnes. ' + explain(error))
         } else {
@@ -219,12 +262,91 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
       try {
         const latest = await application.withOpenStorage(() => application.select(id, dayId))
         if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
-        else setView(latest)
+        else if (selected?.id !== latest.selected?.id || selected?.dayId !== latest.selected?.dayId) {
+          flushSync(() => setView(undefined))
+          setView(latest)
+        } else setView(latest)
         setStorageStatus('')
-        navigate(next)
+        navigate(latest.blocked ? 'context-required' : next)
       } catch (error) {
         focusHeading.current = true
         fail(error)
+      }
+    })
+  }
+
+  function newDriver() {
+    if (inFlight.current || view?.actor.role !== 'instruktør') return
+    setDriverFields({ driverName: '', employeeNumber: '' })
+    setDriverErrors({})
+    setSavedDriverId(undefined)
+    setProblem(undefined)
+    setStorageStatus('')
+    driverAttempt.current = undefined
+    navigate('create-driver')
+  }
+
+  async function loadSelectedDriver(driverId: string) {
+    const latest = await application.withOpenStorage(() => application.selectDriver(driverId))
+    setView(latest)
+    if (screen !== 'drivers') navigate('drivers')
+  }
+
+  function selectDriver(driverId: string) {
+    void perform(async () => {
+      setSelectingDriver(true)
+      try {
+        await loadSelectedDriver(driverId)
+        setStorageStatus('')
+      } catch (error) {
+        report(error)
+        setNavigationError('Sjåføren kunne ikke åpnes. ' + explain(error))
+      } finally {
+        setSelectingDriver(false)
+      }
+    })
+  }
+
+  function submitDriver() {
+    if (inFlight.current || view?.actor.role !== 'instruktør') return
+    const actor = view.actor
+    const issues = validateDriverFields(driverFields)
+    setDriverErrors(issues)
+    if (Object.keys(issues).length) return
+    let attempt = driverAttempt.current
+    if (attempt?.fields !== driverFields || attempt.command.actor.id !== actor.id) {
+      attempt = { fields: driverFields, command: application.newCreateDriverCommand(actor, driverFields) }
+      driverAttempt.current = attempt
+    }
+    const { command } = attempt
+    void perform(async () => {
+      let committed = savedDriverId
+      setProblem(undefined)
+      if (!committed) setStorageStatus('Lagrer …')
+      try {
+        if (!committed) {
+          const result = await application.withOpenStorage(() => application.executeCreateDriver(command))
+          committed = result.driverId
+          setSavedDriverId(committed)
+          setStorageStatus('Lagret på denne enheten')
+        }
+        await loadSelectedDriver(committed)
+      } catch (error) {
+        report(error)
+        if (!committed) setStorageStatus('Endringene er ikke lagret. Prøv igjen.')
+        setProblem(error instanceof AppError ? error : new AppError('storage_read'))
+      }
+    })
+  }
+
+  function restoreInstructor() {
+    void perform(async () => {
+      try {
+        setView(await application.withOpenStorage(() => application.changeRole('instruktør')))
+        setProblem(undefined)
+      } catch (error) {
+        report(error)
+        setProblem(error instanceof AppError ? error : new AppError('storage_read'))
       }
     })
   }
@@ -245,12 +367,16 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
             setDayEditorGeneration(generation => generation + 1)
           }
         }
+        if (latest.blocked) {
+          navigate('context-required')
+          return
+        }
         if (latest.selected?.closed && next !== 'day') {
           navigate('history')
           return
         }
         if (next === 'closure' && !latest.selected?.conclusion) {
-          setNavigationError('Velg fadderrollen for å avslutte perioden.')
+          setNavigationError(`Velg ${professional.roleLower}rollen for å avslutte perioden.`)
           return
         }
         if (next === 'after' && !latest.selected?.driverAfter) {
@@ -262,8 +388,8 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
           return
         }
         if (next === 'create-day' && !latest.selected?.canCreateDay) {
-          setNavigationError(latest.actor.role === 'fadder'
-            ? explain(new AppError('plan_required')) : explain(new AppError('wrong_role')))
+          setNavigationError(latest.actor.role === selected.context
+            ? 'Planen må utvides før neste dag kan opprettes.' : explain(new AppError('wrong_role')))
           return
         }
         if (next === 'extend' && (!latest.selected?.extensionWindow || !availableExtraDays(latest.selected.extensionWindow).length)) {
@@ -286,9 +412,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        const next = await application.withOpenStorage(() =>
-          application.changeRole(role, selected && { runId: selected.id, dayId: selected.dayId }),
-        )
+        const current = selected ?? blockedRun
+        const selection = overview && role === 'instruktør' ? null
+          : current && { runId: current.id, dayId: current.dayId }
+        const next = await application.withOpenStorage(() => application.changeRole(role, selection))
         replaceRoleView(next)
       } catch (error) {
         report(error)
@@ -308,11 +435,14 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
       setStorageStatus('')
       attempt.current = undefined
       clearRoleRestore()
-      if (screen === 'mentor' && !next.selected?.mentorDay) setScreen('day')
-      if (screen === 'closure' && !next.selected?.conclusion) setScreen(next.selected?.closed ? 'history' : 'day')
+      if (overview) setScreen(overviewScreen(next))
+      else if (next.blocked) setScreen('context-required')
+      else if (screen === 'context-required') setScreen(initialScreen(next))
+      else if (screen === 'mentor' && !next.selected?.mentorDay) setScreen('day')
+      else if (screen === 'closure' && !next.selected?.conclusion) setScreen(next.selected?.closed ? 'history' : 'day')
     })
     flushSync(() => { setView(next) })
-    const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === 'fadder'
+    const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === selected?.context
       ? document.getElementById(`day-field-${fieldToFix}`)
       : null
     if (fieldTarget) fieldTarget.focus()
@@ -322,13 +452,26 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   function clearRoleRestore() {
     setRoleRestore(undefined)
     cachedDialog.current = undefined
+    recoverySelection.current = undefined
+  }
+
+  function acceptDayCommandView(next: WorkspaceView) {
+    if (next.blocked) {
+      recoverySelection.current = { runId: next.blocked.id, dayId: next.blocked.dayId }
+      setRoleRestore('local-draft')
+      return false
+    }
+    setView(next)
+    return true
   }
 
   function adoptClosureState(stored: WorkspaceView) {
     const differentRole = view?.actor.id !== stored.actor.id || view?.actor.role !== stored.actor.role
     if (differentRole) replaceRoleView(stored)
     else setView(stored)
-    if (stored.selected?.closed) {
+    if (stored.blocked) {
+      navigate('context-required')
+    } else if (stored.selected?.closed) {
       navigate('history')
     } else if (!stored.selected?.conclusion) {
       navigate('day')
@@ -341,9 +484,11 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   }
 
   async function checkRestoredRole(resume = false) {
-    if (!guardedScreen || !selected || !view) return
+    if (!guardedScreen || !view || checkingRole.current) return
+    checkingRole.current = true
     setRoleRestore('checking')
-    const selection = { runId: selected.id, dayId: selected.dayId }
+    const current = selected ?? blockedRun
+    const selection = recoverySelection.current ?? (current && { runId: current.id, dayId: current.dayId })
     try {
       const beforeFlush = await application.withOpenStorage(() => resume
         ? application.changeRole(draftRole, selection)
@@ -354,12 +499,12 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
       // Rolle og revisjon kan ha endret seg mens editoren ventet på lagring eller feilhåndtering.
       const next = shouldFlush ? await application.read(selection) : beforeFlush
       const latest = next.selected
-      if (screen === 'closure' && flushed && (latest?.closed || latest?.revision !== selected.revision)) {
+      if (screen === 'closure' && flushed && (latest?.closed || latest?.revision !== selected?.revision)) {
         adoptClosureState(next)
         return
       }
       if (!resume && !sameActor(next)) {
-        if (dayCommandForm || !flushed) {
+        if (dayCommandForm || instructorCreation || !flushed) {
           setRoleRestore('local-draft')
           return
         }
@@ -367,7 +512,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
         heading.current?.focus()
         return
       }
-      if (screen === 'mentor' && latest?.dayLocked && !selected.dayLocked) {
+      if (screen === 'mentor' && latest?.dayLocked && !selected?.dayLocked) {
         flushSync(() => {
           editor.current?.restoreLock?.({ ...next, selected: latest })
           clearRoleRestore()
@@ -375,11 +520,13 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
         return
       }
       flushSync(() => {
-        if (screen === 'history' || screen === 'day' || dayCommandForm) setView(next)
-        if (screen === 'day' && !resume && flushed && latest?.revision !== selected.revision) {
+        if (screen === 'history' || screen === 'day' || dayCommandForm || overview || instructorCreation
+          || screen === 'context-required') setView(next)
+        if (screen === 'day' && !resume && flushed && latest?.revision !== selected?.revision) {
           setDayEditorGeneration(generation => generation + 1)
         }
         setRoleRestore(undefined)
+        recoverySelection.current = undefined
       })
       if (screen === 'history') heading.current?.focus()
       const dialog = cachedDialog.current
@@ -391,29 +538,41 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
     } catch (error) {
       report(error)
       setRoleRestore(resume ? 'local-draft' : 'read-error')
+    } finally {
+      checkingRole.current = false
     }
   }
 
-  const hideCachedRoleView = useEffectEvent(() => {
-    // Skjul fadderinnhold før nettleseren kan fryse den gamle lesemodellen.
-    if (!guardedScreen) return
+  function hideRoleView() {
+    // Skjul vurderingsinnhold før nettleseren kan fryse den gamle lesemodellen.
+    if (!guardedScreen || roleRestore) return
     const dialog = document.querySelector<HTMLDialogElement>('dialog:modal')
     if (dialog) {
       cachedDialog.current = { element: dialog, focus: document.activeElement }
       dialog.close()
     }
     flushSync(() => setRoleRestore('checking'))
-  })
+  }
+  const hideCachedRoleView = useEffectEvent(() => { hideRoleView() })
   const showCachedRoleView = useEffectEvent(() => { void checkRestoredRole() })
+  const checkForegroundRole = useEffectEvent(() => {
+    if (!instructorProtected || roleRestore === 'local-draft' || roleRestore === 'read-error' || checkingRole.current) return
+    hideRoleView()
+    if (!document.hidden) void checkRestoredRole()
+  })
 
   useEffect(() => {
     const onHide = (event: PageTransitionEvent) => { if (event.persisted) hideCachedRoleView() }
     const onShow = (event: PageTransitionEvent) => { if (event.persisted) showCachedRoleView() }
     window.addEventListener('pagehide', onHide)
     window.addEventListener('pageshow', onShow)
+    document.addEventListener('visibilitychange', checkForegroundRole)
+    window.addEventListener('focus', checkForegroundRole)
     return () => {
       window.removeEventListener('pagehide', onHide)
       window.removeEventListener('pageshow', onShow)
+      document.removeEventListener('visibilitychange', checkForegroundRole)
+      window.removeEventListener('focus', checkForegroundRole)
     }
   }, [])
 
@@ -447,11 +606,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   function refreshDraft() {
     void perform(async () => {
       try {
-        const current = view?.actor.role === 'sjåfør'
-          ? await application.withOpenStorage(() => application.changeRole('fadder'))
-          : await application.open()
+        const current = view?.actor.role === createContext ? await application.open()
+          : await application.withOpenStorage(() => application.changeRole(createContext))
         setView(current)
-        setProblem(current.actor.role === 'fadder' ? undefined : new AppError('wrong_role'))
+        setProblem(current.actor.role === createContext ? undefined : new AppError('wrong_role'))
       } catch (error) {
         report(error)
         setProblem(error instanceof AppError ? error : new AppError('storage_open'))
@@ -461,9 +619,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
 
   async function loadCommitted(saved: RunReceipt) {
     try {
-      setView(await application.withOpenStorage(() => application.select(saved.runId, saved.dayId)))
+      const latest = await application.withOpenStorage(() => application.select(saved.runId, saved.dayId))
+      setView(latest)
       setStorageStatus('')
-      navigate('day')
+      navigate(initialScreen(latest))
     } catch (error) {
       report(error)
       setProblem(error instanceof AppError ? error : new AppError('storage_read'))
@@ -475,15 +634,15 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   }
 
   function submit() {
-    if (inFlight.current || receipt || view?.actor.role !== 'fadder') return
-    const issues = validateCreateRun(fields)
+    if (inFlight.current || receipt || view?.actor.role !== createContext) return
+    const issues = validateCreateRun(fields, createContext)
     setErrors(issues)
     if (Object.keys(issues).length > 0) return
 
     const actor = view.actor
     let current = attempt.current
     if (current?.fields !== fields || current.command.actor.id !== actor.id) {
-      current = { fields, command: application.newCreateCommand(actor, fields) }
+      current = { fields, command: application.newCreateCommand(actor, fields, runDriver) }
       attempt.current = current
     }
     const { command } = current
@@ -507,8 +666,14 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
   const problemText = problem && (problem.code === 'storage_write'
     ? 'Lagringen kunne ikke fullføres. ' + explain(problem)
     : explain(problem))
-  const canRetry = view?.actor.role === 'fadder'
+  const canRetry = view?.actor.role === createContext
     && (!problem || ['storage_read', 'storage_write', 'storage_open'].includes(problem.code))
+  const assessmentHeading = `Dagens ${professional.assessment}`
+  const title = screen === 'history' && selected?.closed ? 'Hele skjemaet'
+    : screen === 'mentor' ? assessmentHeading
+      : screen === 'create' && runDriver ? 'Opprett instruktørvurdering' : headings[screen]
+  const overviewLabel = view?.actor.role === 'instruktør' ? 'Til instruktøroversikten' : 'Til løpsoversikten'
+  const dayName = selected && (screen === 'baseline' ? selected.baseline.fields.mentorName : selected.fields.mentorName)
 
   return (
     <>
@@ -519,7 +684,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
             <p className="app-name">Digital kjørevurdering</p>
             {view && !roleRestore && (
               <div className="role">
-                {screen === 'create' || screen === 'create-day' || screen === 'extend'
+                {screen === 'create' || screen === 'create-driver' || screen === 'create-day' || screen === 'extend'
                   ? <p>Simuleringsrolle · {roleName[view.actor.role]}</p>
                   : <>
                       <label htmlFor="simulation-role">Simuleringsrolle</label>
@@ -528,25 +693,36 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
                         ref={roleSelect}
                         value={view.actor.role}
                         aria-disabled={busy}
-                        onChange={event => changeRole(event.currentTarget.value === 'sjåfør' ? 'sjåfør' : 'fadder')}
+                        onChange={event => {
+                          const value = event.currentTarget.value
+                          if (isRole(value)) changeRole(value)
+                        }}
                       >
                         <option value="fadder">Fadder</option>
                         <option value="sjåfør">Sjåfør</option>
+                        <option value="instruktør">Instruktør</option>
                       </select>
                     </>}
               </div>
             )}
-            {selected && !roleRestore && screen !== 'create-day' && <p className="day-context">
-              {(screen === 'baseline' ? selected.baseline.fields.driverName : selected.fields.driverName) || 'Sjåførnavn mangler'}
-              {' · Dag '}{screen === 'baseline' ? 1 : selected.day}
-            </p>}
+            {selected && !roleRestore && (
+              <>
+                <p className="day-context">
+                  {(screen === 'baseline' ? selected.baseline.fields.driverName : selected.fields.driverName) || 'Sjåførnavn mangler'}
+                  {' · Dag '}{screen === 'baseline' ? 1 : selected.day}
+                </p>
+                <p className="professional-context">{professional.role}{dayName && ` · ${dayName}`}</p>
+              </>
+            )}
             {view && <p className="network-status" aria-live="polite">{online ? 'Nett tilkoblet' : 'Uten nett'}</p>}
           </div>
         </div>
       </header>
       <main className="content">
-        <h1 ref={heading} tabIndex={-1}>{screen === 'history' && selected?.closed ? 'Hele skjemaet' : headings[screen]}</h1>
-        {screen === 'create' && <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>}
+        <h1 ref={heading} tabIndex={-1}>{title}</h1>
+        {(screen === 'create' || screen === 'create-driver' || screen === 'drivers') && (
+          <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>
+        )}
         {navigationError && <p className="error-panel" role="alert">{navigationError}</p>}
         {screen === 'loading' && <p role="status">Åpner lokalt lager og laster løp …</p>}
         {screen === 'unavailable' && (
@@ -555,10 +731,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
             <button type="button" className="button primary" aria-disabled={busy} onClick={retryOpen}>Prøv igjen</button>
           </section>
         )}
-        {screen === 'runs' && view && (
+        {screen === 'runs' && view && !roleRestore && (
           <>
             {view.actor.role === 'fadder'
-              ? <button type="button" className="button primary" aria-disabled={busy} onClick={newRun}>Opprett løp</button>
+              ? <button type="button" className="button primary" aria-disabled={busy} onClick={() => newRun()}>Opprett løp</button>
               : <p>Velg fadderrollen for å opprette et løp.</p>}
             {view.runs.length === 0
               ? <p className="empty">Det er ingen lagrede løp på denne enheten. Opprett et løp for å registrere den første dagen.</p>
@@ -568,6 +744,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
                       <button type="button" className="run-button" aria-disabled={busy} onClick={() => openRun(run.id)}>
                         <span className="run-name">{run.driverName}</span>
                         <span>Ansattnummer {run.employeeNumber} · <CalendarDate value={run.firstDate} /></span>
+                        {run.context === 'instruktør' && <span>Instruktørvurdering</span>}
                         <span className="run-status">{run.status}</span>
                       </button>
                     </li>
@@ -575,25 +752,56 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
                 </ul>}
           </>
         )}
-        {screen === 'create' && receipt && problem && (
+        {screen === 'drivers' && view?.actor.role === 'instruktør' && !roleRestore && (
+          <InstructorOverview view={view} busy={busy} selectingDriver={selectingDriver} onNewDriver={newDriver}
+            onSelect={selectDriver} onNewRun={newRun} onOpenRun={openRun} />
+        )}
+        {screen === 'create-driver' && view?.actor.role === 'instruktør' && !roleRestore && (
+          <CreateDriverForm view={view} fields={driverFields} errors={driverErrors} busy={busy}
+            problem={problemText} saved={Boolean(savedDriverId)} onSubmit={submitDriver} onSelect={selectDriver}
+            restoreRole={problem?.code === 'stale' || problem?.code === 'wrong_role' ? restoreInstructor : undefined}
+            onCancel={showRuns} onChange={(field, value) => {
+              if (inFlight.current || savedDriverId) return
+              setDriverFields(previous => ({ ...previous, [field]: value }))
+              setDriverErrors(previous => ({ ...previous, [field]: undefined }))
+              setProblem(undefined)
+              setStorageStatus('')
+            }} />
+        )}
+        {blockedRun && !roleRestore && (
+          <>
+            <p>{blockedRun.driverName} · Ansattnummer {blockedRun.employeeNumber} · Dag {blockedRun.day}</p>
+            <p>Vurderingsskjema · {professional.role} · {blockedRun.status}</p>
+            <p>Velg {professional.roleLower}rollen for faglig innsyn og arbeid i denne vurderingen.</p>
+            <div className="actions">
+              <button type="button" className="button primary" aria-disabled={busy}
+                onClick={() => changeRole(blockedRun.context)}>Bytt til {professional.role}</button>
+              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>{overviewLabel}</button>
+            </div>
+          </>
+        )}
+        {screen === 'create' && receipt && problem && !roleRestore && (
           <section aria-label="Lagret løp">
             <p className="error-panel" role="alert">Løpet er lagret, men kunne ikke åpnes. {explain(problem)}</p>
             <button className="button primary" type="button" aria-disabled={busy} onClick={retryCommitted}>Åpne lagret løp</button>
           </section>
         )}
-        {screen === 'create' && !receipt && (
+        {screen === 'create' && !receipt && !roleRestore && (
           <>
-            <p className="context">Bruk fiktive navn og ansattnummer i demonstrasjonen. Alle felt er obligatoriske.</p>
+            {runDriver ? (
+              <p className="context">Faglig kontekst · Instruktør · Registrering {runDriver.id}. Alle felt er obligatoriske.</p>
+            ) : <p className="context">Bruk fiktive navn og ansattnummer i demonstrasjonen. Alle felt er obligatoriske.</p>}
             <CreateRunForm fields={fields} errors={errors} pending={busy} problem={problemText} canRetry={canRetry}
-              recoveryLabel={view?.actor.role === 'sjåfør' ? 'Bytt til Fadder' : 'Last inn gjeldende tilstand'}
+              driver={runDriver} context={createContext}
+              recoveryLabel={view?.actor.role !== createContext ? `Bytt til ${roleName[createContext]}` : 'Last inn gjeldende tilstand'}
               onChange={updateField} onSubmit={submit} onCancel={showRuns} onRefresh={refreshDraft} />
           </>
         )}
         {screen === 'create-day' && selected && view && (
           <div hidden={Boolean(roleRestore)}>
             <CreateDayForm key={selected.id} day={selected} actor={view.actor} application={application} report={report}
-            onWorkspace={setView} onCancel={() => showAssessmentScreen('day')} onComplete={(next, created) => {
-              setView(next)
+            onWorkspace={acceptDayCommandView} onCancel={() => showAssessmentScreen('day')} onComplete={(next, created) => {
+              if (!acceptDayCommandView(next)) return
               setStorageStatus(created ? '' : 'Datoen er allerede registrert. Den eksisterende dagen er åpnet.')
               navigate('day')
             }} />
@@ -602,8 +810,8 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
         {screen === 'extend' && selected && view && (
           <div hidden={Boolean(roleRestore)}>
             <ExtendRunForm key={selected.id} day={selected} actor={view.actor} application={application} report={report}
-            onWorkspace={setView} onCancel={() => showAssessmentScreen('day')} onComplete={next => {
-              setView(next)
+            onWorkspace={acceptDayCommandView} onCancel={() => showAssessmentScreen('day')} onComplete={next => {
+              if (!acceptDayCommandView(next)) return
               navigate('day')
             }} />
           </div>
@@ -615,7 +823,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
             <div className="actions">
               <button type="button" className="button primary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('history')}>Åpne hele skjemaet</button>
-              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
+              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>{overviewLabel}</button>
             </div>
           </>
         )}
@@ -623,9 +831,9 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
           <div hidden={Boolean(roleRestore)}>
             {storageStatus && <p role="status" className="save-status">{storageStatus}</p>}
             <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id)} />
-            {view.actor.role === 'fadder' && !selected.dayLocked && selected.status !== 'Avsluttet'
+            {view.actor.role === selected.context && !selected.dayLocked && selected.status !== 'Avsluttet'
               && selected.days.length === selected.plannedLastDay && selected.days.length < 5 && (
-              <p className="context">Planen må utvides før neste dag kan opprettes. Bruk oppfølgingen i faddervurderingen.</p>
+              <p className="context">Planen må utvides før neste dag kan opprettes. Bruk oppfølgingen i {professional.assessment}en.</p>
             )}
             {selected.canCreateDay && <button type="button" className="button primary" aria-disabled={busy}
               onClick={() => showAssessmentScreen('create-day')}>Opprett neste dag</button>}
@@ -664,10 +872,10 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
             </section>
             {selected.mentorDay && (
               <section className="baseline-entry" aria-labelledby="mentor-entry-heading">
-                <h2 id="mentor-entry-heading">Dagens faddervurdering</h2>
-                <p>{selected.dayLocked ? 'Faddervurderingen er låst' : 'Faddervurderingen er ikke bekreftet'}</p>
+                <h2 id="mentor-entry-heading">{assessmentHeading}</h2>
+                <p>{professional.role}vurderingen er {selected.dayLocked ? 'låst' : 'ikke bekreftet'}</p>
                 <button type="button" className="button secondary" aria-disabled={busy}
-                  onClick={() => showAssessmentScreen('mentor')}>Åpne dagens faddervurdering</button>
+                  onClick={() => showAssessmentScreen('mentor')}>Åpne dagens {professional.assessment}</button>
               </section>
             )}
             <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}/${dayEditorGeneration}`} ref={editor}
@@ -680,7 +888,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
               )}
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('history')}>Åpne historikk</button>
-              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
+              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>{overviewLabel}</button>
             </div>
           </div>
         )}
@@ -697,7 +905,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
         )}
         {screen === 'history' && selected && view && !roleRestore && (
           <>
-            {selected.closed ? <ClosedHistory key={`${view.actor.id}/${selected.id}`} day={{ ...selected, closed: selected.closed }}
+            {selected.closed ? <ClosedHistory key={`${view.actor.id}/${selected.id}/${selected.dayId}`} day={{ ...selected, closed: selected.closed }}
               busy={busy} downloadRunPdf={downloadRunPdf} report={report} /> : (
               <>
                 <p>Planlagt siste dag · Dag {selected.plannedLastDay}</p>
@@ -712,7 +920,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
           </>
         )}
         {(screen === 'baseline' || (screen === 'after' && selected?.driverAfter)) && selected && view && (
-          <>
+          <div hidden={Boolean(roleRestore)}>
             <AssessmentForm key={`${screen}/${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
               phase={screen === 'baseline' ? 'before' : 'driver_after'}
               initial={selected} actor={view.actor} application={application} report={report}
@@ -722,7 +930,7 @@ export function App({ application, downloadRunPdf, logo, prepare, requestPersist
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>
             </div>
-          </>
+          </div>
         )}
         {screen === 'mentor' && selected?.mentorDay && view && (
             <div hidden={Boolean(roleRestore)}>

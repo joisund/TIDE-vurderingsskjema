@@ -1,7 +1,11 @@
-"""Kontroller et PDF-par fra nettleserprøven "laster ned lokal PDF".
+"""Kontroller nedlastet PDF mot frossen kilde fra nettleserprøven.
 
 Valgfri verktøykjede med pdfplumber. Kjør fra app-mappen:
   python tests/pdf/verify-closure.py <eksport.pdf> <frosset-kilde.json>
+
+Kjør samme kontroll for begge faktiske nedlastingene fra instruktørprøven:
+  python tests/pdf/verify-closure.py <prøvemappe>/instruktor.pdf <prøvemappe>/instruktor-kilde.json
+  python tests/pdf/verify-closure.py <prøvemappe>/sjafor.pdf <prøvemappe>/instruktor-kilde.json
 """
 
 import argparse
@@ -60,6 +64,10 @@ def main():
     run = json.loads(args.source.read_text(encoding="utf-8"))
     closure = run["closureSnapshot"]
     history = closure["history"]
+    role = closure["closedBy"]["actor"]["role"]
+    assert (closure["documentVersion"], closure["pdfLayoutVersion"]) == {
+        "fadder": (1, 1), "instruktør": (2, 2),
+    }[role]
     days = [history["firstDay"], *history.get("laterDays", [])]
     sets = [history["baseline"]["answers"]]
     originals = [closure["conclusion"]["text"], closure["closedBy"]["actor"]["name"]]
@@ -77,7 +85,7 @@ def main():
     with pdfplumber.open(args.pdf) as document:
         assert len(document.pages) >= 2
         matrix(document.pages[0], history["content"]["criteria"], sets)
-        full_text, body = [], []
+        full_text, body, confirmation_columns = [], [], [[], []]
         for index, page in enumerate(document.pages, 1):
             size = (841.89, 595.28) if index == 1 else (595.28, 841.89)
             assert abs(page.width - size[0]) < 0.02 and abs(page.height - size[1]) < 0.02
@@ -86,6 +94,10 @@ def main():
             full_text.append(page.extract_text())
             if index > 1:
                 body.append(page.crop((0, 96, page.width, footer["top"] - 3)).extract_text())
+                if role == "instruktør":
+                    boundaries = [28 + (page.width - 56) * fraction for fraction in (.38, .69, 1)]
+                    for column, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
+                        confirmation_columns[column].append(page.crop((left, 80, right, footer["top"] - 3)).extract_text())
         plain = "\n".join(full_text)
         assert not any(unicodedata.category(char) in {"Cf", "Cc"} and char not in "\r\n\t" for char in plain)
         assert "\ufffd" not in plain
@@ -93,7 +105,19 @@ def main():
             assert compact(text) in compact("\n".join(body) if len(text) > 900 else plain), text[:60]
         assert plain.count("Førvurdering bekreftet av") == 1
         assert plain.count("Ettervurdering bekreftet av") == len(days)
-        assert plain.count("Fadderens del bekreftet av") == len(days)
+        assert all(day["mentorConfirmation"]["actor"]["role"] == role for day in days)
+        if role == "fadder":
+            assert plain.count("Fadderens del bekreftet av") == len(days)
+        else:
+            part_label = "Instruktørens del bekreftet av"
+            professional_columns = [compact("".join(column)) for column in confirmation_columns]
+            assert sum(column.count(compact(part_label)) for column in professional_columns) == len(days)
+            for day in days:
+                name = day["mentorConfirmation"]["actor"]["name"]
+                label = compact(f"Dag {day['number']} · {part_label} {name}")
+                assert any(label in column for column in professional_columns)
+            assert "Instruktør" in full_text[0]
+            assert all(compact("Fadderens del bekreftet av") not in column for column in professional_columns)
         print(f"{len(document.pages)} A4-sider, {22 * len(sets)} vurderinger og fulltekst verifisert.")
 
 

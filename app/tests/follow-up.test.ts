@@ -75,8 +75,9 @@ async function putRun(factory: IDBFactory, run: Run) {
   })
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('runs', 'readwrite')
+      const tx = db.transaction(['runs', 'drivers'], 'readwrite')
       tx.objectStore('runs').put({ schemaVersion: SCHEMA_VERSION, data: run }, run.id)
+      tx.objectStore('drivers').put({ schemaVersion: SCHEMA_VERSION, data: run.driver }, run.driver.id)
       tx.oncomplete = () => resolve()
       tx.onabort = () => reject(tx.error)
     })

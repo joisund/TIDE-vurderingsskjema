@@ -4,7 +4,10 @@ import type { DayField } from './day-draft.ts'
 import { validateSavedDriverDays } from './driver-day.ts'
 import { validateSavedPlan } from './follow-up.ts'
 import { checkMentorDay, validateSavedMentorDays } from './mentor-day.ts'
-import { AppError, dayLocks, hasText, isConfirmation, isConfirmationTime, isId, runDays, validateSavedRun } from './run.ts'
+import {
+  AppError, assertProfessionalRole, assessmentContext, dayLocks, hasText, isAssessmentContext,
+  isConfirmation, isConfirmationTime, isId, professionalTerms, runDays, sameDriverReference, validateSavedRun,
+} from './run.ts'
 import type { Actor, Confirmation, Day, Run } from './run.ts'
 
 export type ConclusionStatus = 'approved' | 'follow_up_needed'
@@ -13,8 +16,8 @@ export type ConclusionDraft = { text: string; status: ConclusionStatus | null; m
 type RunHistory = Omit<Run, 'lifecycle' | 'conclusionDraft' | 'closureSnapshot'>
 
 export type ClosureSnapshot = Readonly<{
-  documentVersion: 1
-  pdfLayoutVersion: 1
+  documentVersion: 1 | 2
+  pdfLayoutVersion: 1 | 2
   history: RunHistory & Required<Pick<Run, 'baseline' | 'baselineConfirmation'>>
   conclusion: Readonly<Omit<ConclusionDraft, 'mentorName' | 'status'> & { status: ConclusionStatus }>
   closedBy: Confirmation
@@ -66,6 +69,7 @@ function dayMatchesConfirmations(day: Day) {
 export function checkClosureDays(run: Run): ClosureIssue[] {
   if (!run.firstDay) return [{ section: 'days', message: 'Opprett og bekreft minst én dag.' }]
   const issues: ClosureIssue[] = []
+  const professional = professionalTerms(assessmentContext(run))
   if (!run.baselineConfirmation) {
     issues.push({ dayId: run.firstDay.id, dayNumber: 1, section: 'baseline', message: 'Førvurderingen må bekreftes av sjåføren.' })
   } else if (run.baselineConfirmation.actor.name !== run.firstDay.driverIdentity?.name) {
@@ -93,7 +97,7 @@ export function checkClosureDays(run: Run): ClosureIssue[] {
         issues.push({ ...atDay, section: 'session', field, message })
       }
     }
-    issues.push({ ...atDay, section: 'mentor', message: 'Fadder må fullføre og bekrefte dagen.' })
+    issues.push({ ...atDay, section: 'mentor', message: `${professional.role} må fullføre og bekrefte dagen.` })
   }
   return issues
 }
@@ -105,7 +109,7 @@ function validateConclusionCommand(command: SaveConclusionCommand, fields: reado
     || Object.keys(command.payload).some(key => !fields.includes(key))) {
     throw new AppError('invalid_command')
   }
-  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  if (!isAssessmentContext(command.actor.role)) throw new AppError('wrong_role')
 }
 
 const draftFields = ['text', 'status', 'mentorName']
@@ -121,6 +125,7 @@ export function validateCloseRunCommand(command: CloseRunCommand) {
 }
 
 function assertWritable(run: Run, command: ClosureCommand) {
+  assertProfessionalRole(run, command.actor)
   if (run.id !== command.runId) throw new AppError('run_missing')
   if (run.lifecycle === 'closed') throw new AppError('locked')
   if (run.revision !== command.expectedRevision) throw new AppError('stale')
@@ -136,11 +141,22 @@ export function saveConclusion(run: Run, command: SaveConclusionCommand): Run {
 
 // Samme kontroll brukes før lagring og før senere eksport av den frosne dokumentkilden.
 export function validateClosureSnapshot(snapshot: ClosureSnapshot): void {
-  if (snapshot?.documentVersion !== 1) throw new ClosureSnapshotError('Dokumentversjonen støttes ikke.')
-  if (snapshot.pdfLayoutVersion !== 1) throw new ClosureSnapshotError('PDF-oppsettet for dette løpet støttes ikke.')
+  if (snapshot?.documentVersion !== 1 && snapshot?.documentVersion !== 2) {
+    throw new ClosureSnapshotError('Dokumentversjonen støttes ikke.')
+  }
+  if (snapshot.pdfLayoutVersion !== snapshot.documentVersion) {
+    throw new ClosureSnapshotError('PDF-oppsettet for dette løpet støttes ikke.')
+  }
   if (!snapshot.history?.baseline) throw new ClosureSnapshotError('Den frosne førvurderingen mangler.')
   if (!snapshot.history.baselineConfirmation) throw new ClosureSnapshotError('Bekreftelsen av førvurderingen mangler.')
-  if (!isConfirmation(snapshot.closedBy, 'fadder')) throw new ClosureSnapshotError('Avsluttende fadder eller avslutningstid mangler eller er ugyldig.')
+  const context = snapshot.documentVersion === 1 ? 'fadder' : 'instruktør'
+  if (assessmentContext(snapshot.history) !== context) {
+    throw new ClosureSnapshotError('Den faglige konteksten samsvarer ikke med dokumentversjonen.')
+  }
+  const professional = professionalTerms(context)
+  if (!isConfirmation(snapshot.closedBy, context)) {
+    throw new ClosureSnapshotError(`Avsluttende ${context} eller avslutningstid mangler eller er ugyldig.`)
+  }
   if (!validStatus(snapshot.conclusion?.status) || typeof snapshot.conclusion.text !== 'string') {
     throw new ClosureSnapshotError('Avslutningsvalget eller konklusjonsfeltet mangler eller er ugyldig.')
   }
@@ -154,17 +170,17 @@ export function validateClosureSnapshot(snapshot: ClosureSnapshot): void {
   for (const day of days) {
     const dayLabel = `Dag ${day.number}`
     if (!day.driverConfirmation) throw new ClosureSnapshotError(`${dayLabel} mangler sjåførens etterbekreftelse.`)
-    if (!day.mentorConfirmation) throw new ClosureSnapshotError(`${dayLabel} mangler fadderens bekreftelse.`)
+    if (!day.mentorConfirmation) throw new ClosureSnapshotError(`${dayLabel} mangler ${professional.possessive} bekreftelse.`)
     if (!day.driverAfterAnswers || !day.driverEvaluation) {
       throw new ClosureSnapshotError(`${dayLabel} mangler ettervurderingen eller egenevalueringens registrerte tilstand.`)
     }
-    if (!day.mentorDay) throw new ClosureSnapshotError(`${dayLabel} mangler faddervurderingen.`)
+    if (!day.mentorDay) throw new ClosureSnapshotError(`${dayLabel} mangler ${professional.assessment}en.`)
     if (!dayMatchesConfirmations(day)) throw new ClosureSnapshotError(`${dayLabel} har ufullstendige øktopplysninger eller bekreftelser.`)
   }
   checkDocumentSection(run, 'Førvurderingen eller videreføringen på dag 1 har ugyldige vurderingspunkter.', validateSavedBaseline)
   checkDocumentSection(run, 'Oppfølgingsvalg eller planhistorikk mangler eller er ugyldige.', validateSavedPlan)
   checkDocumentSection(run, 'Sjåførens ettervurderinger eller egenevalueringer er ufullstendige eller ugyldige.', validateSavedDriverDays)
-  checkDocumentSection(run, 'Faddervurderinger, relevansavgjørelser eller obligatoriske øktfelt er ufullstendige eller ugyldige.', validateSavedMentorDays)
+  checkDocumentSection(run, `${professional.role}vurderinger, relevansavgjørelser eller obligatoriske øktfelt er ufullstendige eller ugyldige.`, validateSavedMentorDays)
   const positions = days.reduce((total, day) => total + day.driverAfterAnswers!.length + day.mentorDay!.answers.length,
     snapshot.history.baseline.answers.length)
   if (positions !== 22 + 44 * days.length) throw new ClosureSnapshotError('Dokumentet mangler vurderingsposisjoner.')
@@ -175,7 +191,8 @@ function checkDocumentSection(run: Run, message: string, validate: (run: Run) =>
     validate(run)
   } catch (error) {
     if (error instanceof AnswerSetError) {
-      const phase = { before: 'Førvurderingen', driver_after: 'Ettervurderingen', mentor: 'Faddervurderingen' }[error.phase]
+      const phase = { before: 'Førvurderingen', driver_after: 'Ettervurderingen',
+        mentor: `${professionalTerms(assessmentContext(run)).role}vurderingen` }[error.phase]
       const day = runDays(run).find(item => item.id === error.parentId)
       throw new ClosureSnapshotError(`${phase}${day ? ` på dag ${day.number}` : ''}. ${error.detail}`)
     }
@@ -192,10 +209,12 @@ export function validateSavedClosure(run: Run): void {
   }
   const snapshot = run.closureSnapshot
   if (!snapshot || snapshot.history?.id !== run.id || snapshot.history.revision !== run.revision
+    || !snapshot.history.driver || !sameDriverReference(snapshot.history.driver, run.driver)
+    || assessmentContext(snapshot.history) !== assessmentContext(run)
     || run.conclusionDraft !== undefined) throw new ClosureSnapshotError('Den frosne dokumentkilden mangler eller samsvarer ikke med løpet.')
   validateClosureSnapshot(snapshot)
   const days = runDays(run)
-  const frozenDays = runDays({ ...snapshot.history, lifecycle: 'closed' })
+  const frozenDays = runDays(snapshot.history)
   if (days.length !== frozenDays.length || days.some((day, index) => day.id !== frozenDays[index].id)) {
     throw new ClosureSnapshotError('Registrerte dager i dokumentkilden samsvarer ikke med løpet.')
   }
@@ -210,11 +229,14 @@ export function closeRun(run: Run, command: CloseRunCommand): Run {
   if (checkClosureDays(run).length || !run.baseline || !run.baselineConfirmation) throw new AppError('validation')
 
   const revision = run.revision + 1
+  const context = assessmentContext(run)
+  const version = context === 'fadder' ? 1 : 2
   const snapshot: ClosureSnapshot = structuredClone({
-    documentVersion: 1,
-    pdfLayoutVersion: 1,
+    documentVersion: version,
+    pdfLayoutVersion: version,
     history: {
       id: run.id, revision, driver: run.driver, initialLastDay: run.initialLastDay,
+      ...(context === 'instruktør' && { assessmentContext: context }),
       plan: run.plan, planHistoryBase: run.planHistoryBase, followUpDecisions: run.followUpDecisions, planEvents: run.planEvents,
       firstDay: run.firstDay, laterDays: run.laterDays, content: run.content,
       baseline: run.baseline, baselineConfirmation: run.baselineConfirmation,

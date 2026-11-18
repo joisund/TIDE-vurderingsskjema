@@ -4,13 +4,23 @@ import type { FollowUpDecision, PlanEvent, RunPlan } from './follow-up.ts'
 import type { MentorDay } from './mentor-day.ts'
 import type { ClosureSnapshot, ConclusionDraft } from './closure.ts'
 
-export type Role = 'fadder' | 'sjåfør'
+export type AssessmentContext = 'fadder' | 'instruktør'
+export type Role = AssessmentContext | 'sjåfør'
 export type Actor = { id: string; role: Role }
+export type ProfessionalActor = { id: string; role: AssessmentContext; name: string }
 export type StartPlan = 1 | 2 | 3
 
-export type CreateRunFields = {
-  driverName: string
-  employeeNumber: string
+export type DriverFields = { driverName: string; employeeNumber: string }
+export type DriverReference = { id: string; name: string; employeeNumber: string }
+export type CreateDriverCommand = {
+  commandId: string
+  actor: Actor
+  expectedRevision: 0
+  payload: DriverFields & { driverId: string }
+}
+export type DriverReceipt = { driverId: string }
+
+export type CreateRunFields = DriverFields & {
   mentorName: string
   firstDate: string
   initialLastDay: string
@@ -55,7 +65,8 @@ export type Run = {
   id: string
   revision: number
   lifecycle: 'open' | 'closed'
-  driver: { id: string; name: string; employeeNumber: string }
+  driver: DriverReference
+  assessmentContext?: AssessmentContext
   initialLastDay: StartPlan
   plan?: RunPlan
   planHistoryBase?: RunPlan
@@ -75,14 +86,14 @@ export type CreateRunCommand = {
   runId: string
   actor: Actor
   expectedRevision: number
-  payload: CreateRunFields & { driverId: string; dayId: string }
+  payload: CreateRunFields & { driverId: string; dayId: string; assessmentContext?: AssessmentContext; useExistingDriver?: true }
 }
 
 export type RunReceipt = { runId: string; dayId: string; revision: number }
 
 export type ErrorCode =
   | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale' | 'baseline_required'
-  | 'day_limit' | 'plan_required' | 'driver_identity_required'
+  | 'day_limit' | 'plan_required' | 'driver_identity_required' | 'driver_reference_missing'
   | 'command_conflict' | 'run_missing' | 'day_missing' | 'locked' | 'storage_open' | 'storage_read'
   | 'storage_write' | 'storage_blocked' | 'schema_changed'
   | 'unsupported_schema' | 'resource_load'
@@ -136,11 +147,16 @@ function startPlanFrom(value: string): StartPlan | undefined {
   }
 }
 
-export function validateCreateRun(fields: CreateRunFields): FieldErrors {
-  const errors: FieldErrors = {}
+export function validateDriverFields(fields: DriverFields): FieldErrors<DriverFields> {
+  const errors: FieldErrors<DriverFields> = {}
   if (!hasText(fields.driverName)) errors.driverName = 'Skriv inn sjåførens navn.'
   if (!hasText(fields.employeeNumber)) errors.employeeNumber = 'Skriv inn ansattnummer.'
-  if (!hasText(fields.mentorName)) errors.mentorName = 'Skriv inn fadderens navn.'
+  return errors
+}
+
+export function validateCreateRun(fields: CreateRunFields, context: AssessmentContext = 'fadder'): FieldErrors {
+  const errors: FieldErrors = validateDriverFields(fields)
+  if (!hasText(fields.mentorName)) errors.mentorName = `Skriv inn ${professionalTerms(context).possessive} navn.`
   if (!isCalendarDate(fields.firstDate)) errors.firstDate = 'Oppgi en gyldig første kalenderdato.'
   if (!startPlanFrom(fields.initialLastDay)) errors.initialLastDay = 'Velg en startplan på én, to eller tre dager.'
   return errors
@@ -154,9 +170,70 @@ export function isId(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
+export function isAssessmentContext(value: unknown): value is AssessmentContext {
+  return value === 'fadder' || value === 'instruktør'
+}
+
+export function isRole(value: unknown): value is Role {
+  return value === 'sjåfør' || isAssessmentContext(value)
+}
+
+export function assessmentContext(run: Pick<Run, 'assessmentContext'>): AssessmentContext {
+  return run.assessmentContext ?? 'fadder'
+}
+
+export function assertProfessionalRole(run: Run, actor: Actor) {
+  const context = assessmentContext(run)
+  if (actor.role !== context) throw new AppError('wrong_role')
+  return context
+}
+
+export function canReadAssessment(run: Run, role: Role) {
+  return role === 'sjåfør' || role === assessmentContext(run)
+}
+
+const terms = {
+  fadder: { role: 'Fadder', roleLower: 'fadder', definite: 'fadderen', possessive: 'fadderens',
+    authorPrefix: 'Fadders', assessment: 'faddervurdering', day: 'fadderdag', days: 'fadderdager',
+    formTitle: 'Fadderskjema' },
+  instruktør: { role: 'Instruktør', roleLower: 'instruktør', definite: 'instruktøren', possessive: 'instruktørens',
+    authorPrefix: 'Instruktørens', assessment: 'instruktørvurdering', day: 'vurderingsdag', days: 'vurderingsdager',
+    formTitle: 'Instruktørskjema' },
+} as const
+
+export function professionalTerms(context: AssessmentContext) {
+  return terms[context]
+}
+
+export function validDriverReference(reference: DriverReference | undefined): reference is DriverReference {
+  return isId(reference?.id) && hasText(reference.name) && hasText(reference.employeeNumber)
+}
+
+export function sameDriverReference(a: DriverReference, b: DriverReference) {
+  return a.id === b.id && a.name === b.name && a.employeeNumber === b.employeeNumber
+}
+
+export function createDriver(command: CreateDriverCommand): DriverReference {
+  const ids = [command.commandId, command.actor?.id, command.payload?.driverId]
+  if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length
+    || Object.keys(command.payload).some(key => !['driverId', 'driverName', 'employeeNumber'].includes(key))) {
+    throw new AppError('invalid_command')
+  }
+  if (command.actor.role !== 'instruktør') throw new AppError('wrong_role')
+  if (command.expectedRevision !== 0) throw new AppError('stale')
+  const fields = command.payload
+  const errors = validateDriverFields(fields)
+  if (Object.keys(errors).length) throw new AppError<DriverFields>('validation', errors)
+  return { id: fields.driverId, name: fields.driverName.trim(), employeeNumber: fields.employeeNumber.trim() }
+}
+
 export function validateCreateIds(command: CreateRunCommand) {
   const ids = [command.commandId, command.runId, command.actor?.id, command.payload?.driverId, command.payload?.dayId]
-  if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length) {
+  if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length
+    || (command.payload.assessmentContext !== undefined && !isAssessmentContext(command.payload.assessmentContext))
+    || (command.payload.useExistingDriver !== undefined && command.payload.useExistingDriver !== true)
+    || Object.keys(command.payload).some(key => !['driverName', 'employeeNumber', 'mentorName',
+      'firstDate', 'initialLastDay', 'driverId', 'dayId', 'assessmentContext', 'useExistingDriver'].includes(key))) {
     throw new AppError('invalid_command')
   }
 }
@@ -180,8 +257,8 @@ export function dayLocks(run: Run, day: Day) {
 }
 
 export function validateSavedRun(run: Run) {
-  if (!isId(run?.id) || !['open', 'closed'].includes(run.lifecycle) || !isId(run.driver?.id)
-    || !hasText(run.driver.name) || !hasText(run.driver.employeeNumber)
+  if (!isId(run?.id) || !['open', 'closed'].includes(run.lifecycle) || !validDriverReference(run.driver)
+    || (run.assessmentContext !== undefined && !isAssessmentContext(run.assessmentContext))
     || !Number.isSafeInteger(run.revision) || run.revision < 1
     || !run.firstDay || (run.laterDays !== undefined && !Array.isArray(run.laterDays))
     || (run.baselineConfirmation !== undefined && !isConfirmation(run.baselineConfirmation, 'sjåfør'))
@@ -198,7 +275,7 @@ export function validateSavedRun(run: Run) {
       || !hasText(day.mentorName) || !isCalendarDate(day.date) || day.date <= previousDate
       || (day.mentorNameDraft !== undefined && (typeof day.mentorNameDraft !== 'string' || hasText(day.mentorNameDraft)))
       || (day.driverConfirmation !== undefined && !isConfirmation(day.driverConfirmation, 'sjåfør'))
-      || (day.mentorConfirmation !== undefined && (!isConfirmation(day.mentorConfirmation, 'fadder')
+      || (day.mentorConfirmation !== undefined && (!isConfirmation(day.mentorConfirmation, assessmentContext(run))
         || day.mentorConfirmation.date !== day.date || day.mentorConfirmation.part !== 'mentor_day'))
       || (day.identityConfirmed && !(day.number === 1 ? run.baselineConfirmation : day.driverConfirmation))
       // 1.1 lagret ingen bekreftede dager. Bare ulåst identitet kan falle tilbake på løpsprofilen.
@@ -216,7 +293,7 @@ export function validateSavedRun(run: Run) {
   }
 }
 
-export function runDays(run: Run): Day[] {
+export function runDays(run: Pick<Run, 'firstDay' | 'laterDays'>): Day[] {
   return [run.firstDay, ...(run.laterDays ?? [])]
 }
 
@@ -233,10 +310,12 @@ export function replaceDay(run: Run, day: Day): Run {
 
 export function createRun(command: CreateRunCommand, content: ContentSnapshot): Run {
   validateCreateIds(command)
-  if (command.actor.role !== 'fadder') throw new AppError('wrong_role')
+  const context = assessmentContext(command.payload)
+  if (command.actor.role !== context) throw new AppError('wrong_role')
+  if (context === 'instruktør' && command.payload.useExistingDriver !== true) throw new AppError('driver_reference_missing')
   if (command.expectedRevision !== 0) throw new AppError('stale')
   const fields = command.payload
-  const errors = validateCreateRun(fields)
+  const errors = validateCreateRun(fields, context)
   const initialLastDay = startPlanFrom(fields.initialLastDay)
   if (Object.keys(errors).length || !initialLastDay) throw new AppError('validation', errors)
   validateContent(content)
@@ -245,6 +324,7 @@ export function createRun(command: CreateRunCommand, content: ContentSnapshot): 
     id: command.runId,
     revision: 1,
     lifecycle: 'open',
+    assessmentContext: context,
     driver: { id: fields.driverId, name: fields.driverName.trim(), employeeNumber: fields.employeeNumber.trim() },
     initialLastDay,
     firstDay: {

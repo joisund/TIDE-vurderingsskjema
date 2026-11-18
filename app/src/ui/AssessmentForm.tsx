@@ -1,6 +1,7 @@
 import { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, Ref } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
+import { AppError } from '../domain/run.ts'
 import { confirmationView, driverDayConfirmationView } from '../application/run-application.ts'
 import { checkBaselineAnswers } from '../domain/baseline.ts'
 import type { ConfirmBaselineCommand } from '../domain/baseline.ts'
@@ -35,7 +36,7 @@ const evaluationChoice = { submitted: 'Innsending', skipped: 'Hoppet over' }
 
 function hasDriverDayIssues(day: DayView) {
   const answers = checkBaselineAnswers(day.driverAfter!.answers, day.day === 1 ? day.baseline.answers : undefined)
-  const issues = { ...checkDayFields(day.fields, 'driver'), ...answers }
+  const issues = { ...checkDayFields(day.fields, 'driver', day.context), ...answers }
   return Object.keys(issues).length > 0
 }
 
@@ -93,10 +94,11 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
   const blockEdits = checking || navigating || hasUnresolvedConfirmation
   const answerIssues = checkBaselineAnswers(assessment.answers.map(answer => ({ ...answer, ...rows[answer.criterionId] })),
     after && saved.day === 1 ? saved.baseline.answers : undefined)
-  const dayIssues = checkDayFields(assessment.fields, 'driver')
+  const dayIssues = checkDayFields(assessment.fields, 'driver', saved.context)
   const issues = Object.keys(answerIssues).length + Object.keys(dayIssues).length
   const evaluation = saved.driverAfter?.evaluation
   const savedDecision = saved.driverAfter?.evaluationDraft?.decision
+  const requiresRole = conflict?.readError instanceof AppError && conflict.readError.code === 'wrong_role'
   const conflictDay = conflict?.stored?.selected
   const conflictResult = conflictDay?.driverAfter?.evaluation?.state
   const conflictDecision = conflictResult === 'submitted' || conflictResult === 'skipped' ? conflictResult
@@ -442,7 +444,9 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
             <>
               <p className="field-error">{explain(conflict.readError)}</p>
               <button type="button" className="button secondary" disabled={reviewing}
-                onClick={() => void editor.reloadConflict().then(() => recoverFocus())}>Hent lagrede svar</button>
+                onClick={() => void editor.reloadConflict(requiresRole).then(() => recoverFocus())}>
+                {requiresRole ? 'Gjenoppta som sjåfør' : 'Hent lagrede svar'}
+              </button>
             </>
           )}
         </section>

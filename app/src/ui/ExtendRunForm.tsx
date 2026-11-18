@@ -47,14 +47,14 @@ export function ExtendRunForm({ day, actor, application, report, onWorkspace, on
   function read(asMentor = false) {
     const selection = { runId: day.id, dayId: day.dayId }
     return application.withOpenStorage(() => asMentor
-      ? application.changeRole('fadder', selection)
+      ? application.changeRole(day.context, selection)
       : application.read(selection))
   }
 
   function submit() {
     void perform(async () => {
       if (!receipt) {
-        if (actor.role !== 'fadder' || !proposal) return
+        if (actor.role !== day.context || !proposal) return
         const previous = attempt.current
         const command = previous && previous.expectedRevision === day.revision && previous.actor.id === actor.id
           ? previous : application.newFollowUpCommand(actor, day, proposal.choice, 'extension')
@@ -62,9 +62,10 @@ export function ExtendRunForm({ day, actor, application, report, onWorkspace, on
         try {
           setReceipt(await application.withOpenStorage(() => application.executeFollowUp(command)))
         } catch (failure) {
-          if (failure instanceof AppError && ['stale', 'command_conflict', 'locked', 'validation'].includes(failure.code)) {
-            attempt.current = undefined
-            onWorkspace(await read())
+          if (failure instanceof AppError && ['stale', 'wrong_role', 'command_conflict', 'locked', 'validation'].includes(failure.code)) {
+            const latest = await read()
+            if (!latest.blocked) attempt.current = undefined
+            onWorkspace(latest)
           }
           throw failure
         }
@@ -78,7 +79,7 @@ export function ExtendRunForm({ day, actor, application, report, onWorkspace, on
       <p>Planlagt siste dag · Dag {receipt?.plan.lastDay ?? day.plannedLastDay}</p>
       <p role="status" className="save-status">{receipt ? 'Lagret på denne enheten' : pending ? 'Lagrer …' : ''}</p>
       {error && <p role="alert" className="error-panel">{receipt ? 'Den lagrede planen kunne ikke åpnes. ' : 'Endringene er ikke lagret. '}{error}</p>}
-      {actor.role === 'fadder' && !receipt && (
+      {actor.role === day.context && !receipt && (
         <>
           {options.length > 0 ? (
             <div className="field">
@@ -99,12 +100,12 @@ export function ExtendRunForm({ day, actor, application, report, onWorkspace, on
         </>
       )}
       <div className="actions">
-        {actor.role === 'fadder' || receipt
+        {actor.role === day.context || receipt
           ? <button type="submit" className="button primary" disabled={pending || (!receipt && !proposal)}>
               {receipt ? 'Åpne lagret plan' : error ? 'Prøv igjen' : 'Lagre utvidelse'}
             </button>
           : <button type="button" className="button primary" disabled={pending}
-              onClick={() => void perform(async () => onWorkspace(await read(true)))}>Gjenoppta som fadder</button>}
+              onClick={() => void perform(async () => onWorkspace(await read(true)))}>Gjenoppta som {day.context}</button>}
         <button type="button" className="button secondary" disabled={pending} onClick={onCancel}>
           {receipt ? 'Til dagsoversikten' : 'Avbryt'}
         </button>

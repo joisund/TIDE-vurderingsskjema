@@ -7,6 +7,7 @@ import { availableExtraDays, previewFollowUp } from '../domain/follow-up.ts'
 import { mentorAssessmentIssues } from '../domain/mentor-day.ts'
 import type { ConfirmMentorDayCommand, MentorDayReceipt, ReviewTarget } from '../domain/mentor-day.ts'
 import { reasonRequirement, validateReason } from '../domain/reason.ts'
+import { AppError, professionalTerms } from '../domain/run.ts'
 import type { Actor, Criterion } from '../domain/run.ts'
 import { AssessmentMatrix, Modal } from './AssessmentMatrix.tsx'
 import { answerText, focusMatrixField } from './assessment-fields.ts'
@@ -44,10 +45,13 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
   const { draft, changes, conflict, notice, reviewing } = editor
   const { saved, rows, comments, rejectionDrafts } = draft
   const { mentorDay } = saved
+  const professional = professionalTerms(saved.context)
   const [dialog, setDialog] = useState<Dialog>()
   const [confirmDialog, setConfirmDialog] = useState<{ snapshot: MentorView; trigger: HTMLElement }>()
   const [confirmationIssue, setConfirmationIssue] = useState('')
   const [unresolved, setUnresolved] = useState<ConfirmMentorDayCommand>()
+  const [confirmationRoleBlocked, setConfirmationRoleBlocked] = useState(false)
+  const resumeConfirmation = useRef<HTMLButtonElement>(null)
   const [confirming, setConfirming] = useState(false)
   const confirmingRef = useRef(false)
   const lockedStatus = useRef<HTMLParagraphElement>(null)
@@ -71,7 +75,7 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
   const issues = mentorAssessmentIssues(
     mentorDay.answers.map(answer => ({ ...answer, ...rows[answer.criterionId] })),
     mentorDay.relevance,
-    Object.fromEntries(Object.entries(rows).map(([id, row]) => [id, row.reasonDraft ?? undefined])),
+    Object.fromEntries(Object.entries(rows).map(([id, row]) => [id, row.reasonDraft ?? undefined])), saved.context,
   )
   const answerIssues = showIssues
     ? Object.fromEntries(issues.filter(issue => issue.field !== 'review').map(issue => [issue.criterionId, issue.message])) : {}
@@ -79,10 +83,11 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
     ? Object.fromEntries(issues.filter(issue => issue.field === 'review').map(issue => [issue.criterionId, issue.message])) : {}
   const answered = Object.values(rows).filter(row => row.value !== null).length
   const reviewCount = issues.filter(issue => issue.field === 'review').length
+  const requiresRole = conflict?.readError instanceof AppError && conflict.readError.code === 'wrong_role'
   const previous = conflict?.latest?.selected.mentorDay
   const confirmation = previous?.confirmation ?? mentorDay.confirmation
   const planView = previous && conflict?.latest ? { ...conflict.latest.selected, mentorDay: previous } : saved
-  const conflictProposal = previous && editor.planDirty && previewFollowUp(previous.followUp.window, draft.followUp)
+  const conflictProposal = previous && editor.planDirty && previewFollowUp(previous.followUp.window, draft.followUp, saved.context)
   const planBlocked = !canEdit || blocked || Boolean(draft.problem?.savedPlan || (draft.problem && editor.planPending))
   const planIssue = 'field' in editor.planPreview ? editor.planPreview : undefined
   const completion = mentorDay.completion
@@ -105,10 +110,14 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
       setConfirmDialog(undefined)
       setCompleteness(undefined)
       setUnresolved(undefined)
+      setConfirmationRoleBlocked(false)
       setConfirmationIssue('')
       editor.restoreLock(latest)
     },
   }))
+  useLayoutEffect(() => {
+    if (confirmationRoleBlocked) resumeConfirmation.current?.focus()
+  }, [confirmationRoleBlocked])
   useLayoutEffect(() => {
     if (confirmation && focusLock.current) {
       focusLock.current = false
@@ -197,6 +206,7 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
     focusLock.current = Boolean(stored.selected.mentorDay?.confirmation)
     setConfirmDialog(undefined)
     setUnresolved(undefined)
+    setConfirmationRoleBlocked(false)
     setCompleteness(undefined)
     editor.adopt(stored)
   }
@@ -217,8 +227,12 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
       failure = error
       report(error)
     }
-    const { latest, readError } = await editor.readStored()
-    if (latest && (latest.selected.revision !== snapshot.revision || latest.actor.id !== actor.id || latest.actor.role !== actor.role)) {
+    const { latest, readError, roleBlocked } = await editor.readStored()
+    if (roleBlocked) {
+      setUnresolved(command)
+      setConfirmationRoleBlocked(true)
+      setConfirmationIssue(`Gjenoppta som ${professional.roleLower} for å kontrollere dagsbekreftelsen.`)
+    } else if (latest && (latest.selected.revision !== snapshot.revision || latest.actor.id !== actor.id || latest.actor.role !== actor.role)) {
       adoptConfirmation(latest)
       if (!latest.selected.dayLocked) setConfirmationIssue('Løpet eller den aktive rollen ble endret. Kontroller de lagrede opplysningene før du bekrefter på nytt.')
     } else if (receipt) {
@@ -238,15 +252,18 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
     setConfirming(false)
   }
 
-  async function verifyConfirmation() {
+  async function verifyConfirmation(restoreRole = false) {
     if (confirmingRef.current || !unresolved) return
     confirmingRef.current = true
     setConfirming(true)
-    const { latest, readError } = await editor.readStored()
+    const { latest, readError, roleBlocked } = await editor.readStored(restoreRole)
     if (latest) {
       focusOpen.current = !latest.selected.dayLocked
       adoptConfirmation(latest)
       setConfirmationIssue(latest.selected.dayLocked ? '' : 'Dagen er åpen. Kontroller de lagrede opplysningene før du bekrefter på nytt.')
+    } else if (roleBlocked) {
+      setConfirmationRoleBlocked(true)
+      setConfirmationIssue(`Gjenoppta som ${professional.roleLower} for å kontrollere dagsbekreftelsen.`)
     } else setConfirmationIssue(`Status for dagsbekreftelsen kunne ikke leses. ${explain(readError)}`)
     confirmingRef.current = false
     setConfirming(false)
@@ -287,22 +304,22 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
     const author = mentorDay.answers.find(answer => answer.criterionId === id)?.actor
     return (
       <div className="mentor-row-details">
-        {author && <p className="hint">Fadders svar · {author.name}</p>}
+        {author && <p className="hint">{professional.authorPrefix} svar · {author.name}</p>}
         {mentorDay.reasonDrafts[id]?.trim() && <p className="assessment-text">Lagret begrunnelsesutkast · {mentorDay.reasonDrafts[id]}</p>}
         {mentorDay.rejectionDrafts[id]?.trim() && <p className="assessment-text">Lagret avslagsutkast · {mentorDay.rejectionDrafts[id]}</p>}
         {mentorDay.editable ? <><button className="button secondary" type="button" id={`comment-trigger-${id}`}
-          aria-label={`Kommentar til ${title} · Fadder · Dag ${saved.day}`}
+          aria-label={`Kommentar til ${title} · ${professional.role} · Dag ${saved.day}`}
           aria-expanded={commentOpen} aria-controls={`comment-${id}`}
           onClick={() => setOpenComments(current => ({ ...current, [id]: !current[id] }))}>Kommentar</button>
-        {!commentOpen && comments[id] && <p className="hint">Kommentar fra fadder · {comment?.actor.name ?? mentorDay.mentorName}</p>}
+        {!commentOpen && comments[id] && <p className="hint">Kommentar fra {professional.roleLower} · {comment?.actor.name ?? mentorDay.mentorName}</p>}
         <div className="mentor-comment" id={`comment-${id}`} hidden={!commentOpen}>
-          <label htmlFor={`comment-text-${id}`}>Fadders kommentar · {title} · Dag {saved.day}</label>
-          {comment && <p className="hint">Lagret av {comment.actor.name}, fadder.</p>}
+          <label htmlFor={`comment-text-${id}`}>{professional.authorPrefix} kommentar · {title} · Dag {saved.day}</label>
+          {comment && <p className="hint">Lagret av {comment.actor.name}, {comment.actor.role}.</p>}
           <p className="hint" id={`comment-hint-${id}`}>Frivillig</p>
           <textarea id={`comment-text-${id}`} aria-describedby={`comment-hint-${id}`}
             readOnly={!canEdit || blocked} value={comments[id] ?? ''}
             onChange={event => editor.updateText('comments', id, event.currentTarget.value)} />
-        </div></> : comment && <><p className="hint">Fadders kommentar · {comment.actor.name}</p>
+        </div></> : comment && <><p className="hint">{professional.authorPrefix} kommentar · {comment.actor.name}</p>
           <p className="assessment-text">{comment.text}</p></>}
         {relevance.state === 'not_applicable' ? (
           relevance.previouslyReviewed && <p className="hint">Sjåføren har ikke lenger valgt Ikke relevant.</p>
@@ -311,12 +328,12 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
             <h3>Sjåførens relevansvalg</h3>
             <p><strong>{mentorDay.driverName}, sjåfør</strong> · Ikke relevant</p>
             <p className="assessment-text">Sjåførens begrunnelse · {relevance.reason}</p>
-            {relevance.state === 'pending' && <p>Fadders avgjørelse · Ikke behandlet</p>}
-            {relevance.state === 'outdated' && <p>Fadders avgjørelse · Utdatert</p>}
+            {relevance.state === 'pending' && <p>{professional.authorPrefix} avgjørelse · Ikke behandlet</p>}
+            {relevance.state === 'outdated' && <p>{professional.authorPrefix} avgjørelse · Utdatert</p>}
             {'review' in relevance && (
               <>
-                <p>Fadders avgjørelse · {relevance.state === 'accepted' ? 'Bekreftet' : 'Avslått'} av {relevance.review.actor.name}</p>
-                {relevance.review.rejectionComment && <p className="assessment-text">Fadders avslagskommentar · {relevance.review.rejectionComment}</p>}
+                <p>{professional.authorPrefix} avgjørelse · {relevance.state === 'accepted' ? 'Bekreftet' : 'Avslått'} av {relevance.review.actor.name}</p>
+                {relevance.review.rejectionComment && <p className="assessment-text">{professional.authorPrefix} avslagskommentar · {relevance.review.rejectionComment}</p>}
               </>
             )}
             {reviewIssues[id] && <p className="field-error" id={`review-issue-${id}`}>{reviewIssues[id]}</p>}
@@ -348,15 +365,25 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
     )
   }
 
+  if (confirmationRoleBlocked) return (
+    <div className="error-panel">
+      <p role="alert">{confirmationIssue}</p>
+      <button ref={resumeConfirmation} className="button secondary" type="button" disabled={confirming}
+        onClick={() => void verifyConfirmation(true)}>Gjenoppta som {professional.roleLower}</button>
+    </div>
+  )
+
   return (
-    <section aria-label="Fadderens vurdering" ref={section} tabIndex={-1}>
-      <p className="context">Fadder · {mentorDay.mentorName} · Dag {saved.day} · <CalendarDate value={saved.fields.date} /></p>
-      <p ref={lockedStatus} tabIndex={-1} className="baseline-state">{confirmation ? `Låst. Bekreftet av ${confirmation.actor.name}, fadder.`
-        : mentorDay.editable ? 'Faddervurderingen er ikke bekreftet' : 'Faddervurderingen er låst'}</p>
-      {confirmation && <p className="hint">Faddervurdering · <CalendarDate value={confirmation.date} /> · Bekreftelsestid{' '}
+    <section aria-label={`${professional.role}ens vurdering`} ref={section} tabIndex={-1}>
+      <p className="context">{professional.role} · {mentorDay.mentorName} · Dag {saved.day} · <CalendarDate value={saved.fields.date} /></p>
+      <p ref={lockedStatus} tabIndex={-1} className="baseline-state">{confirmation ? (confirmation.actor.role === 'instruktør'
+        ? `Instruktørens del bekreftet av ${confirmation.actor.name}`
+        : `Låst. Bekreftet av ${confirmation.actor.name}, ${confirmation.actor.role}.`)
+        : `${professional.role}vurderingen er ${mentorDay.editable ? 'ikke bekreftet' : 'låst'}`}</p>
+      {confirmation && <p className="hint">{professional.role}vurdering · <CalendarDate value={confirmation.date} /> · Bekreftelsestid{' '}
         <ConfirmationTime value={confirmation.confirmedAt} />
       </p>}
-      <p>{answered} av {mentorDay.answers.length} fadderpunkter besvart. {reviewCount > 0
+      <p>{answered} av {mentorDay.answers.length} {professional.roleLower}punkter besvart. {reviewCount > 0
         ? `${reviewCount} av sjåførens relevansvalg må behandles.` : 'Ingen aktuelle relevansvalg krever behandling.'}</p>
       {!mentorDay.driverReady && mentorDay.editable && <p>Du kan fortsette å fylle ut. Sjåføren må bekrefte sin del før dagen kan låses.</p>}
       <p className="save-status" role={modalStatus ? undefined : 'status'} aria-atomic={modalStatus ? undefined : true}>{status}</p>
@@ -381,10 +408,10 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
       )}
       {conflict && (
         <section className="saved-snapshot" aria-labelledby="mentor-conflict-heading">
-          <h2 id="mentor-conflict-heading">Lagrede fadderopplysninger</h2>
+          <h2 id="mentor-conflict-heading">Lagrede {professional.roleLower}opplysninger</h2>
           {conflict.latest ? (
             <>
-              <p>Sammenlign fadderutkastet med de lagrede opplysningene.</p>
+              <p>Sammenlign {professional.roleLower}utkastet med de lagrede opplysningene.</p>
               {editor.planDirty && <FollowUpConflict saved={conflict.latest.selected} value={draft.followUp}
                 proposal={conflictProposal || undefined} />}
               <ul className="assessment-text">
@@ -414,10 +441,10 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
               </ul>
               <div className="actions">
                 {editor.staleRole && <button className="button secondary" type="button" disabled={blocked}
-                  onClick={() => void editor.refreshConflict(true)}>Gjenoppta som fadder</button>}
+                  onClick={() => void editor.refreshConflict(true)}>Gjenoppta som {professional.roleLower}</button>}
                 {!editor.staleRole && previous?.editable && <button className="button primary" type="button" disabled={blocked}
                   onClick={() => void editor.resolveConflict(true)}>{conflictProposal && 'field' in conflictProposal
-                    ? 'Behold fadderutkastet for redigering' : 'Lagre mitt fadderutkast'}</button>}
+                    ? `Behold ${professional.roleLower}utkastet for redigering` : `Lagre mitt ${professional.roleLower}utkast`}</button>}
                 <button className="button secondary" type="button" disabled={blocked}
                   onClick={() => void editor.resolveConflict(false)}>Bruk lagrede opplysninger</button>
               </div>
@@ -426,7 +453,9 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
             <>
               <p className="field-error">{explain(conflict.readError)}</p>
               <button className="button secondary" type="button" disabled={blocked}
-                onClick={() => void editor.refreshConflict()}>Hent lagrede opplysninger</button>
+                onClick={() => void editor.refreshConflict(requiresRole)}>
+                {requiresRole ? `Gjenoppta som ${professional.roleLower}` : 'Hent lagrede opplysninger'}
+              </button>
             </>
           )}
         </section>
@@ -442,10 +471,10 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
       </div>}
       {completeness && (
         <section className={showIssues && hasIssues ? 'error-panel baseline-missing' : 'baseline-missing'} aria-labelledby="mentor-missing-heading">
-          <h2 id="mentor-missing-heading" tabIndex={-1} ref={issueHeading}>Mangler i faddervurderingen</h2>
+          <h2 id="mentor-missing-heading" tabIndex={-1} ref={issueHeading}>Mangler i {professional.assessment}en</h2>
           <p aria-live="polite">{completeness === 'checking' ? 'Kontrollerer lagrede opplysninger …'
             : completeness === 'failed' ? 'Kontrollen kunne ikke fullføres. Prøv igjen.' : null}</p>
-          {showIssues && !issues.length && <p>Alle fadderpunkter og aktuelle relevansvalg er behandlet.</p>}
+          {showIssues && !issues.length && <p>Alle {professional.roleLower}punkter og aktuelle relevansvalg er behandlet.</p>}
           {showIssues && hasIssues && <ul>
             {completion?.baselineMissing && <li><button className="issue-link" type="button" onClick={() => leaveForIssue(() => options.onDriverPart('baseline'))}>
               Sjåføren må bekrefte førvurderingen.
@@ -470,7 +499,8 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
         </section>
       )}
       <AssessmentMatrix criteria={mentorDay.criteria} answers={mentorDay.answers} rows={rows} issues={answerIssues}
-        editable={canEdit} blocked={blocked} context={`Fadder · Faddervurdering · Dag ${saved.day}`} reasonLabel="Fadders begrunnelse"
+        editable={canEdit} blocked={blocked} context={`${professional.role} · ${professional.role}vurdering · Dag ${saved.day}`}
+        reasonLabel={`${professional.authorPrefix} begrunnelse`}
         helpDisabled={completeness === 'checking'}
         onHelp={(criterion, trigger) => {
           if (!checkingRef.current && !confirmDialog) setDialog({ kind: 'help', criterion, trigger })
@@ -479,13 +509,13 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
           if (value === 'not_relevant') setDialog({ kind: 'reason', criterion, trigger })
           else editor.updateRows(criterion.id, { value, reason: null })
         }} renderDetails={details} />
-      {confirmDialog && <Modal title="Bekreft faddervurderingen og lås dagen" trigger={confirmDialog.trigger}
+      {confirmDialog && <Modal title={`Bekreft ${professional.assessment}en og lås dagen`} trigger={confirmDialog.trigger}
         fallbackFocus={section} dismiss={() => setConfirmDialog(undefined)} blocking={confirming}>
-        <p>Fadder · {confirmDialog.snapshot.mentorDay.mentorName}</p>
+        <p>{professional.role} · {confirmDialog.snapshot.mentorDay.mentorName}</p>
         <p>Dag {confirmDialog.snapshot.day} · <CalendarDate value={confirmDialog.snapshot.fields.date} /></p>
-        <p>Du bekrefter faddervurderingen for dag {confirmDialog.snapshot.day}.</p>
+        <p>Du bekrefter {professional.assessment}en for dag {confirmDialog.snapshot.day}.</p>
         <p><strong>Dagens vurderinger og kommentarer låses permanent.</strong></p>
-        <p>Faddervurderingen, relevansbehandlingen, øktopplysningene og dagens oppfølgingsvalg blir skrivebeskyttet. Sjåførens før- og ettervurdering forblir låst.</p>
+        <p>{professional.role}vurderingen, relevansbehandlingen, øktopplysningene og dagens oppfølgingsvalg blir skrivebeskyttet. Sjåførens før- og ettervurdering forblir låst.</p>
         {[...Object.values(confirmDialog.snapshot.mentorDay.reasonDrafts), ...Object.values(confirmDialog.snapshot.mentorDay.rejectionDrafts)]
           .some(text => text?.trim()) && <p>Lagrede utkast til begrunnelser og avslag forblir merket som utkast.</p>}
         {confirmationIssue && <p className="field-error" role="alert">{confirmationIssue}</p>}
@@ -510,12 +540,12 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
             </>
           ) : (
             <form onSubmit={event => saveReason(event, dialog)}>
-              <p className="dialog-context" id="mentor-dialog-context">Fadder · {mentorDay.mentorName} · Faddervurdering · Dag {saved.day}</p>
+              <p className="dialog-context" id="mentor-dialog-context">{professional.role} · {mentorDay.mentorName} · {professional.role}vurdering · Dag {saved.day}</p>
               <p className="dialog-criterion" id="mentor-dialog-criterion">{dialog.criterion.title}</p>
               {dialog.kind === 'reject' && (
                 <p className="assessment-text" id="mentor-dialog-driver-reason">{dialog.driverName}, sjåfør · Ikke relevant · {dialog.driverReason}</p>
               )}
-              <label htmlFor="mentor-reason">{dialog.kind === 'reason' ? 'Begrunn hvorfor dette ikke er relevant' : 'Fadders kommentar ved avslag'}</label>
+              <label htmlFor="mentor-reason">{dialog.kind === 'reason' ? 'Begrunn hvorfor dette ikke er relevant' : `${professional.authorPrefix} kommentar ved avslag`}</label>
               <p id="mentor-reason-hint" className="hint">{reasonRequirement}</p>
               <textarea id="mentor-reason" ref={reasonField} value={reasonText(dialog.criterion.id, dialog.kind)}
                 readOnly={!canEdit || blocked}

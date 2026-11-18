@@ -1,5 +1,7 @@
-import { AppError, createRun, dayLocks, findDay, runDays, validateContent, validateCreateIds } from '../domain/run.ts'
-import type { Actor, ContentSnapshot, CreateRunCommand, CreateRunFields, Day, Role, Run, RunReceipt } from '../domain/run.ts'
+import { AppError, assessmentContext, canReadAssessment, createRun, dayLocks, findDay, isId, runDays, validateContent, validateCreateIds } from '../domain/run.ts'
+import type {
+  Actor, ContentSnapshot, CreateDriverCommand, CreateRunCommand, CreateRunFields, Day, DriverFields, DriverReference, Role, Run, RunReceipt,
+} from '../domain/run.ts'
 import { dayDraft, dayFieldAccess, dayFields, validateDayDraftCommand } from '../domain/day-draft.ts'
 import type { DayChanges, SaveDayDraftCommand } from '../domain/day-draft.ts'
 import type { RunStore, Selection, WorkspaceState } from './run-store.ts'
@@ -36,6 +38,8 @@ function summary(run: Run) {
   const identity = source.firstDay.driverIdentity ?? source.driver
   return {
     id: run.id,
+    driverId: source.driver.id,
+    context: assessmentContext(source),
     status: runStatus(run),
     driverName: identity.name,
     employeeNumber: identity.employeeNumber,
@@ -101,12 +105,13 @@ function mentorDayView(run: Run, day: Day) {
 
 function historyDay(run: Run, day: Day, role: Role, full: boolean) {
   return {
+    context: assessmentContext(run),
     day: day.number,
     dayId: day.id,
     fields: dayDraft(run, day),
     baseline: baselineView(run, role),
     driverAfter: driverAfterView(run, day, role),
-    ...((full || role === 'fadder') && { mentorDay: mentorDayView(run, day) }),
+    ...((full || role === assessmentContext(run)) && { mentorDay: mentorDayView(run, day) }),
   }
 }
 
@@ -115,24 +120,32 @@ export type HistoryDay = ReturnType<typeof historyDay>
 function toView(state: WorkspaceState) {
   const selection = state.session.selection
   const stored = state.runs.find(item => item.id === selection?.runId)
-  const run = stored && historicalRun(stored)
+  const lastDay = stored && selection && findDay(stored, selection.dayId)
+  if (selection && (!stored || !lastDay)) throw new AppError('storage_read')
+  const role = state.session.actor.role
+  const blocked = stored && lastDay && !canReadAssessment(stored, role)
+    ? { ...summary(stored), day: lastDay.number, dayId: lastDay.id }
+    : undefined
+  const run = stored && !blocked ? historicalRun(stored) : undefined
   const day = run && selection && findDay(run, selection.dayId)
   const plan = run && currentPlan(run)
   const closure = run?.closureSnapshot
-  const role = state.session.actor.role
-  if (selection && (!run || !day)) throw new AppError('storage_read')
+  const professional = run && role === assessmentContext(run)
   return {
     actor: { ...state.session.actor },
     runs: state.runs.map(summary),
+    blocked,
+    drivers: role === 'instruktør' ? state.drivers : [],
+    selectedDriverId: role === 'instruktør' ? state.session.driverId : undefined,
     selected: run && day && plan && {
       ...summary(run),
       ...historyDay(run, day, role, Boolean(closure)),
       revision: run.revision,
       access: dayFieldAccess(run, day, role),
       ...dayLocks(run, day),
-      extensionWindow: role === 'fadder' && run.lifecycle === 'open' && day.mentorConfirmation
+      extensionWindow: professional && run.lifecycle === 'open' && day.mentorConfirmation
         ? followUpWindow(run, day, 'extension') : undefined,
-      ...(role === 'fadder' && run.lifecycle === 'open' && {
+      ...(professional && run.lifecycle === 'open' && {
         conclusion: { draft: conclusionDraft(run), issues: checkClosureDays(run) },
       }),
       closed: closure && {
@@ -143,14 +156,14 @@ function toView(state: WorkspaceState) {
         history: closure.history.planEvents ?? [],
         days: runDays(run).map(item => historyDay(run, item, role, true)),
       },
-      canCreateDay: run.lifecycle === 'open' && runDays(run).length < plan.lastDay && role === 'fadder',
+      canCreateDay: run.lifecycle === 'open' && runDays(run).length < plan.lastDay && professional,
       planRevision: plan.revision,
       plannedLastDay: plan.lastDay,
       plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
       days: runDays(run).map(item => ({
         id: item.id, number: item.number, date: item.date, driverConfirmation: item.driverConfirmation,
         dayLocked: dayLocks(run, item).dayLocked,
-        ...(closure || role === 'fadder' ? { mentorConfirmation: item.mentorConfirmation } : {}),
+        ...(closure || professional ? { mentorConfirmation: item.mentorConfirmation } : {}),
       })),
     },
   }
@@ -224,6 +237,9 @@ function fingerprint({ actor, expectedRevision, runId, payload }: CreateRunComma
     runId, actor.id, actor.role, expectedRevision,
     payload.driverName, payload.employeeNumber, payload.mentorName, payload.firstDate,
     payload.initialLastDay, payload.driverId, payload.dayId,
+    ...(payload.assessmentContext !== undefined || payload.useExistingDriver
+      ? [payload.assessmentContext ?? null, payload.useExistingDriver ?? false]
+      : []),
   ])
 }
 
@@ -240,7 +256,7 @@ export class RunApplication {
 
   async open(): Promise<WorkspaceView> {
     validateContent(this.#content)
-    return toView(await this.#store.open({ fadder: this.#newId(), sjåfør: this.#newId() }))
+    return toView(await this.#store.open({ fadder: this.#newId(), sjåfør: this.#newId(), instruktør: this.#newId() }))
   }
 
   async withOpenStorage<T>(operation: () => Promise<T>): Promise<T> {
@@ -253,13 +269,32 @@ export class RunApplication {
     return operation()
   }
 
-  newCreateCommand(actor: Actor, fields: CreateRunFields): CreateRunCommand {
+  newCreateDriverCommand(actor: Actor, fields: DriverFields): CreateDriverCommand {
+    return { commandId: this.#newId(), actor: { ...actor }, expectedRevision: 0, payload: { ...fields, driverId: this.#newId() } }
+  }
+
+  async executeCreateDriver(command: CreateDriverCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    const { actor, expectedRevision, payload } = snapshot
+    if (!isId(snapshot.commandId)) throw new AppError('invalid_command')
+    return this.#store.createDriver(snapshot, JSON.stringify([
+      'create-driver', actor.id, actor.role, expectedRevision, payload.driverId, payload.driverName, payload.employeeNumber,
+      Object.keys(payload).sort(),
+    ]))
+  }
+
+  newCreateCommand(actor: Actor, fields: CreateRunFields, driver?: DriverReference): CreateRunCommand {
     return {
       commandId: this.#newId(),
       runId: this.#newId(),
       actor: { ...actor },
       expectedRevision: 0,
-      payload: { ...fields, driverId: this.#newId(), dayId: this.#newId() },
+      payload: {
+        ...fields,
+        ...(driver && { driverName: driver.name, employeeNumber: driver.employeeNumber, useExistingDriver: true }),
+        driverId: driver?.id ?? this.#newId(), dayId: this.#newId(),
+        ...(actor.role === 'instruktør' && { assessmentContext: actor.role }),
+      },
     }
   }
 
@@ -505,7 +540,15 @@ export class RunApplication {
     return toView(await this.#store.select(runId, dayId))
   }
 
-  async changeRole(role: Role, selection?: Selection) {
+  async showDrivers() {
+    return toView(await this.#store.showDrivers())
+  }
+
+  async selectDriver(driverId: string) {
+    return toView(await this.#store.selectDriver(driverId))
+  }
+
+  async changeRole(role: Role, selection?: Selection | null) {
     return toView(await this.#store.changeRole(role, selection))
   }
 }

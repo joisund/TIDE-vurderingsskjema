@@ -130,6 +130,7 @@ export function useAssessmentDraft({ initial, phase, actor, application, report,
       const latest = await application.withOpenStorage(() => restoreRole
         ? application.changeRole(actor.role, selection)
         : application.read(selection))
+      if (latest.blocked) return { readError: new AppError('wrong_role') }
       if (!latest.selected || (phase === 'driver_after' && !latest.selected.driverAfter)) throw new AppError('storage_read')
       return { stored: { ...latest, selected: latest.selected } }
     } catch (error) {

@@ -1,5 +1,5 @@
 import { checkDayFields, dayDraft } from './day-draft.ts'
-import { AppError, hasText, isConfirmationTime, isId, validateContent } from './run.ts'
+import { AppError, assessmentContext, hasText, isConfirmationTime, isId, validateContent } from './run.ts'
 import type { Actor, Run } from './run.ts'
 import { reasonRequirement, validateReason } from './reason.ts'
 
@@ -224,7 +224,7 @@ export function confirmBaseline(run: Run, command: ConfirmBaselineCommand): Run 
   const baseline = writableBaseline(run, command)
   const day = run.firstDay
   const fields = dayDraft(run, day)
-  const issues = { ...checkDayFields(fields, 'driver'), ...checkBaselineAnswers(baseline.answers) }
+  const issues = { ...checkDayFields(fields, 'driver', assessmentContext(run)), ...checkBaselineAnswers(baseline.answers) }
   if (day.number !== 1 || !isId(day.id) || !isId(day.driverId) || day.driverId !== run.driver.id) {
     throw new AppError('invalid_command')
   }

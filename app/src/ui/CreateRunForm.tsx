@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react'
 import type { FormEvent } from 'react'
-import type { CreateRunFields, FieldErrors } from '../domain/run.ts'
+import { professionalTerms } from '../domain/run.ts'
+import type { AssessmentContext, CreateRunFields, DriverReference, FieldErrors } from '../domain/run.ts'
 
 const textFields = [
   { name: 'driverName', label: 'Sjåførnavn' },
   { name: 'employeeNumber', label: 'Ansattnummer' },
-  { name: 'mentorName', label: 'Faddernavn' },
+  { name: 'mentorName', label: '' },
   { name: 'firstDate', label: 'Første dato' },
 ] as const
 
@@ -16,13 +17,16 @@ type Props = {
   problem?: string
   canRetry: boolean
   recoveryLabel: string
+  context: AssessmentContext
+  driver?: DriverReference
   onChange: (field: keyof CreateRunFields, value: string) => void
   onSubmit: () => void
   onCancel: () => void
   onRefresh: () => void
 }
 
-export function CreateRunForm({ fields, errors, pending, problem, canRetry, recoveryLabel, onChange, onSubmit, onCancel, onRefresh }: Props) {
+export function CreateRunForm({ fields, errors, pending, problem, canRetry, recoveryLabel, context, driver,
+  onChange, onSubmit, onCancel, onRefresh }: Props) {
   const summary = useRef<HTMLDivElement>(null)
   const hasErrors = Object.keys(errors).length > 0
   useEffect(() => {
@@ -66,7 +70,7 @@ export function CreateRunForm({ fields, errors, pending, problem, canRetry, reco
           const describedBy = [isDate && 'date-hint', errorId(name)].filter(Boolean).join(' ') || undefined
           return (
             <div className="field" key={name}>
-              <label htmlFor={name}>{label}</label>
+              <label htmlFor={name}>{name === 'mentorName' ? `${professionalTerms(context).role}navn` : label}</label>
               {isDate && <p className="hint" id="date-hint">Bruk formatet ÅÅÅÅ-MM-DD.</p>}
               <input
                 id={name}
@@ -75,7 +79,7 @@ export function CreateRunForm({ fields, errors, pending, problem, canRetry, reco
                 required
                 autoComplete="off"
                 spellCheck={false}
-                readOnly={pending}
+                readOnly={pending || Boolean(driver && (name === 'driverName' || name === 'employeeNumber'))}
                 value={fields[name]}
                 aria-invalid={errors[name] ? true : undefined}
                 aria-describedby={describedBy}
@@ -107,7 +111,7 @@ export function CreateRunForm({ fields, errors, pending, problem, canRetry, reco
       <div className="actions">
         {canRetry
           ? <button className="button primary" type="submit" aria-disabled={pending}>
-              {problem ? 'Prøv igjen' : 'Opprett løp'}
+              {problem ? 'Prøv igjen' : context === 'instruktør' ? 'Opprett instruktørvurdering' : 'Opprett løp'}
             </button>
           : <button className="button primary" type="button" aria-disabled={pending} onClick={onRefresh}>
               {recoveryLabel}

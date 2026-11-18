@@ -68,7 +68,13 @@ async function loadPdfResources(signal: AbortSignal) {
 
 export const renderClosurePdf: RenderClosurePdf = async (source, signal) => {
   if (!pdfReady) throw new Error('PDF-ressursene er ikke klare.')
-  if (source.pdfLayoutVersion !== 1) throw new PdfRenderingError('PDF-oppsettet støttes ikke.')
+  switch (source.pdfLayoutVersion) {
+    case 1:
+    case 2:
+      break
+    default:
+      throw new PdfRenderingError('PDF-oppsettet støttes ikke.')
+  }
   return pdfBlobFromStream(() => pdf(closureDocument({ logo, source })).toBuffer(), signal, prefix => {
     const firstBox = /^\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/m.exec(prefix)
     if (!firstBox || Math.abs(Number(firstBox[1]) - 841.89) > 0.02 || Math.abs(Number(firstBox[2]) - 595.28) > 0.02) {

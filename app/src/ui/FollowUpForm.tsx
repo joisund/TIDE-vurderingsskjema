@@ -1,13 +1,15 @@
 import { availableExtraDays } from '../domain/follow-up.ts'
 import type { FollowUpChoice, FollowUpInput, PlanEvent, previewFollowUp } from '../domain/follow-up.ts'
 import { followUpText, training } from '../content/assessment-labels.ts'
+import { professionalTerms } from '../domain/run.ts'
+import type { AssessmentContext } from '../domain/run.ts'
 import type { DayView } from '../application/run-application.ts'
 import { focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import type { MentorView } from './use-mentor-draft.ts'
 
-export function FollowUpText({ choice }: { choice?: FollowUpChoice }) {
-  return <>{followUpText(choice)}</>
+export function FollowUpText({ choice, context }: { choice?: FollowUpChoice; context: AssessmentContext }) {
+  return <>{followUpText(choice, context)}</>
 }
 
 export function PlanHistory({ history }: { history: readonly PlanEvent[] }) {
@@ -18,8 +20,8 @@ export function PlanHistory({ history }: { history: readonly PlanEvent[] }) {
       <ol className="follow-up-history">
         {history.map(event => (
           <li key={event.commandId}>
-            <p><strong>Dag {event.dayNumber} · <CalendarDate value={event.date} /></strong> · {event.actor.name}, fadder</p>
-            <p>{event.source === 'extension' && 'Senere utvidelse · '}{followUpText(event.choice)}</p>
+            <p><strong>Dag {event.dayNumber} · <CalendarDate value={event.date} /></strong> · {event.actor.name}, {event.actor.role}</p>
+            <p>{event.source === 'extension' && 'Senere utvidelse · '}{followUpText(event.choice, event.actor.role)}</p>
             <p>Planlagt siste dag · {event.oldLastDay === event.newLastDay
               ? `Dag ${event.newLastDay} (uendret)` : `Dag ${event.oldLastDay} → dag ${event.newLastDay}`}</p>
           </li>
@@ -29,11 +31,11 @@ export function PlanHistory({ history }: { history: readonly PlanEvent[] }) {
   )
 }
 
-function followUpDraftText(input: FollowUpInput) {
+function followUpDraftText(input: FollowUpInput, context: AssessmentContext) {
   if (input.need === 'no') return 'Nei'
   if (input.need !== 'yes') return 'Ubesvart'
-  if (input.type === 'training') return `Ja · ${training}`
-  if (input.type === 'days') return `Ja · Flere fadderdager · ${input.extraDays || 'Antall mangler'}`
+  if (input.type === 'training') return `Ja · ${training(context)}`
+  if (input.type === 'days') return `Ja · Flere ${professionalTerms(context).days} · ${input.extraDays || 'Antall mangler'}`
   return 'Ja · Oppfølgingstype mangler'
 }
 
@@ -43,8 +45,8 @@ export function FollowUpConflict({ saved, value, proposal }: {
   return (
     <>
       <p>Lagret plan · Dag {saved.plannedLastDay}</p>
-      {saved.mentorDay && <p>Lagret oppfølgingsvalg · {followUpText(saved.mentorDay.followUp.decision?.choice)}</p>}
-      <p>Ditt ulagrede oppfølgingsvalg · {followUpDraftText(value)}</p>
+      {saved.mentorDay && <p>Lagret oppfølgingsvalg · {followUpText(saved.mentorDay.followUp.decision?.choice, saved.context)}</p>}
+      <p>Ditt ulagrede oppfølgingsvalg · {followUpDraftText(value, saved.context)}</p>
       {proposal && ('choice' in proposal ? <p>Foreslått siste dag med lagret plan · Dag {proposal.proposedLastDay}</p>
         : <p className="field-error">{proposal.message}</p>)}
     </>
@@ -86,7 +88,7 @@ export function FollowUpForm({ view, value, result, dirty, showIssues, blocked, 
           <p><strong>Foreslått siste dag</strong> · Dag {result.proposedLastDay}</p>
         )}
       </div>
-      <p>{decision ? <>Registrert for dag {view.day} · {followUpText(decision.choice)}</> : 'Dagens oppfølging er ubesvart.'}</p>
+      <p>{decision ? <>Registrert for dag {view.day} · {followUpText(decision.choice, view.context)}</> : 'Dagens oppfølging er ubesvart.'}</p>
       {mentorDay.editable && (
         <div className="follow-up-fields">
           <fieldset disabled={blocked} aria-disabled={pending || undefined} aria-describedby={needsError}>
@@ -113,7 +115,7 @@ export function FollowUpForm({ view, value, result, dirty, showIssues, blocked, 
                   aria-describedby={cannotExtend ? 'follow-up-day-limit' : undefined} aria-invalid={Boolean(typeError)}
                   disabled={cannotExtend && value.type !== 'days'}
                   onChange={() => onChange({ need: 'yes', type: 'days', extraDays: '' })} />
-                Flere fadderdager
+                Flere {professionalTerms(view.context).days}
               </label>
               {cannotExtend && <p id="follow-up-day-limit" className="hint">Det er ingen ekstra dager tilgjengelig innen femdagersgrensen.</p>}
               {value.type === 'days' && (
@@ -134,7 +136,7 @@ export function FollowUpForm({ view, value, result, dirty, showIssues, blocked, 
                 <input id="follow-up-training" type="radio" name="follow-up-type" value="training" checked={value.type === 'training'}
                   aria-invalid={Boolean(typeError)}
                   onChange={() => onChange({ need: 'yes', type: 'training', extraDays: '' })} />
-                {training}
+                {training(view.context)}
               </label>
               {typeError && <p id={typeError} className="field-error">{issue?.message}</p>}
             </fieldset>

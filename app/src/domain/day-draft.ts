@@ -1,5 +1,5 @@
-import { AppError, dayLocks, findDay, hasText, isCalendarDate, isId, replaceDay, runDays } from './run.ts'
-import type { Actor, Day, FieldErrors, Role, Run, SessionFields } from './run.ts'
+import { AppError, assessmentContext, canReadAssessment, dayLocks, findDay, hasText, isCalendarDate, isId, isRole, professionalTerms, replaceDay, runDays } from './run.ts'
+import type { Actor, AssessmentContext, Day, FieldErrors, Role, Run, SessionFields } from './run.ts'
 
 export type DayDraft = SessionFields & {
   driverName: string
@@ -41,10 +41,10 @@ export function dayDraft(run: Run, day: Day): DayDraft {
 
 export function dayFieldAccess(run: Run, day: Day, role: Role): DayFieldAccess {
   const { dayLocked, identityLocked } = dayLocks(run, day)
-  const mentor = role === 'fadder' ? 'editable' : 'read-only'
+  const mentor = role === assessmentContext(run) ? 'editable' : 'read-only'
   const identity = identityLocked ? 'locked' : mentor
   const mentorField = dayLocked ? 'locked' : mentor
-  const time = dayLocked ? 'locked' : 'editable'
+  const time = dayLocked ? 'locked' : canReadAssessment(run, role) ? 'editable' : 'read-only'
   return {
     driverName: identity, employeeNumber: identity, date: identity,
     mentorName: mentorField, bus1: mentorField, bus2: mentorField, routes: mentorField,
@@ -56,11 +56,11 @@ export function isShiftTime(value: string) {
   return value.length === 5 && /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)
 }
 
-export function checkDayFields(fields: DayDraft, forStage: 'driver' | 'day-lock'): DayDraftErrors {
+export function checkDayFields(fields: DayDraft, forStage: 'driver' | 'day-lock', context: AssessmentContext = 'fadder'): DayDraftErrors {
   const issues: DayDraftErrors = {}
   if (!hasText(fields.driverName)) issues.driverName = 'Skriv inn sjåførens navn.'
   if (!hasText(fields.employeeNumber)) issues.employeeNumber = 'Skriv inn ansattnummer.'
-  if (!hasText(fields.mentorName)) issues.mentorName = 'Skriv inn fadderens navn.'
+  if (!hasText(fields.mentorName)) issues.mentorName = `Skriv inn ${professionalTerms(context).possessive} navn.`
   if (!isCalendarDate(fields.date)) issues.date = 'Oppgi en gyldig dato som ÅÅÅÅ-MM-DD.'
   if (forStage === 'driver') return issues
 
@@ -75,7 +75,7 @@ export function validateDayDraftCommand(command: SaveDayDraftCommand) {
   const ids = [command.commandId, command.runId, command.actor?.id, command.payload?.dayId]
   const changes = command.payload?.changes
   if (!ids.every(isId) || new Set(ids.map(id => id.toLowerCase())).size !== ids.length
-    || (command.actor.role !== 'fadder' && command.actor.role !== 'sjåfør')
+    || !isRole(command.actor.role)
     || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 1
     || !changes || Object.keys(changes).length === 0) {
     throw new AppError('invalid_command')
@@ -89,6 +89,7 @@ export function validateDayDraftCommand(command: SaveDayDraftCommand) {
 
 export function updateDayDraft(run: Run, command: SaveDayDraftCommand): Run {
   validateDayDraftCommand(command)
+  if (!canReadAssessment(run, command.actor.role)) throw new AppError('wrong_role')
   if (run.id !== command.runId) throw new AppError('run_missing')
   if (run.revision !== command.expectedRevision) throw new AppError('stale')
   if (run.revision === Number.MAX_SAFE_INTEGER) throw new AppError('storage_write')

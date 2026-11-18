@@ -1,7 +1,7 @@
 import { IndexedDbRunStore, SCHEMA_VERSION } from '../adapters/indexeddb/run-store.ts'
-import { preparePdfResources, renderClosurePdf } from '../adapters/pdf/renderer.tsx'
+import { preparePdfResources, renderClosurePdf, renderTechnicalPdf } from '../adapters/pdf/renderer.tsx'
 import { RunApplication } from '../application/run-application.ts'
-import { createRunPdfDownload } from '../application/run-pdf.ts'
+import { createRunPdfDownload, createTechnicalPdfDownload } from '../application/run-pdf.ts'
 import logo from '../assets/tide-logo-rgb.png'
 import { approvedContent } from '../content/approved-content.ts'
 import { AppError } from '../domain/run.ts'
@@ -19,6 +19,7 @@ function browserStorage(): IDBFactory | undefined {
 
 const application = new RunApplication(new IndexedDbRunStore(browserStorage()), approvedContent, () => crypto.randomUUID())
 const downloadRunPdf = createRunPdfDownload(application, renderClosurePdf)
+const downloadTechnicalPdf = createTechnicalPdfDownload(application, renderTechnicalPdf)
 let stylesheetLoads = 0
 
 function stylesReady() {
@@ -85,4 +86,4 @@ function report(error: unknown) {
   console.warn('Tide', { code: error instanceof AppError ? error.code : 'unexpected', build: __APP_BUILD__, schema: SCHEMA_VERSION })
 }
 
-export const app = { application, downloadRunPdf, logo, prepare, requestPersistence, report }
+export const app = { application, downloadRunPdf, downloadTechnicalPdf, logo, prepare, requestPersistence, report }

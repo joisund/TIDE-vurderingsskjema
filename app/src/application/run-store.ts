@@ -8,10 +8,21 @@ import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../doma
 import type { ConfirmMentorDayCommand, MentorDayReceipt, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 import type { FollowUpReceipt, SaveFollowUpCommand } from '../domain/follow-up.ts'
 import type { CloseRunCommand, SaveConclusionCommand } from '../domain/closure.ts'
+import type {
+  TechnicalCommand, TechnicalReadProblem, TechnicalReceipt, TechnicalSelection, TechnicalSummary, TechnicalTraining,
+} from '../domain/technical-training.ts'
 
 export type Selection = { runId: string; dayId: string }
-export type Session = { actor: Actor; selection?: Selection; driverId?: string }
-export type WorkspaceState = { session: Session; runs: Run[]; drivers: DriverReference[] }
+export type Session = { actor: Actor; selection?: Selection; driverId?: string; document?: TechnicalSelection }
+export type WorkspaceState = {
+  session: Session
+  runs: Run[]
+  drivers: DriverReference[]
+  technicalDocuments: (TechnicalSummary | TechnicalReadProblem)[]
+  technical?: TechnicalTraining
+  technicalProblem?: TechnicalReadProblem
+  technicalDriverActorId: string
+}
 
 export interface RunStore {
   open(actors: Record<Role, string>): Promise<WorkspaceState>
@@ -35,4 +46,7 @@ export interface RunStore {
   showDrivers(): Promise<WorkspaceState>
   selectDriver(driverId: string): Promise<WorkspaceState>
   changeRole(role: Role, selection?: Selection | null): Promise<WorkspaceState>
+  executeTechnical(command: TechnicalCommand, fingerprint: string): Promise<TechnicalReceipt>
+  readTechnical(selection: TechnicalSelection, requireSelected?: boolean): Promise<TechnicalTraining>
+  selectTechnical(selection: TechnicalSelection): Promise<WorkspaceState>
 }

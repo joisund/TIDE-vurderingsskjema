@@ -406,6 +406,42 @@ button.matrix-choice { cursor: pointer; }
 .help-dialog h2 { font-size: 1.125rem; }
 .help-dialog button { margin-top: 16px; }
 
+.technical-training { display: grid; gap: 12px; }
+.technical-training > .button { justify-self: start; }
+.technical-details, .technical-free-text { display: grid; gap: 8px; min-width: 0; }
+.technical-free-text { white-space: pre-wrap; }
+.technical-group h2 {
+  padding: 12px;
+  border-inline-start: 4px solid var(--tide-green);
+  background: var(--tide-light-sand);
+}
+.technical-group ol { list-style: none; margin: 0; padding: 0; }
+.technical-group li { padding: 14px 4px; border-bottom: 1px solid var(--tide-sand); }
+.technical-note, .technical-point-status { margin-top: 4px; }
+.technical-point-status { font-size: .875rem; font-weight: 700; }
+.technical-point-actions { align-items: center; }
+.technical-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 44px;
+  min-height: 48px;
+  padding-inline: 6px;
+  cursor: pointer;
+}
+.technical-check input {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.technical-training .assessment-dialog form { margin-top: 12px; }
+.technical-training button { overflow-wrap: anywhere; }
+
 @media print {
   .matrix-headings { position: static; }
   .help-trigger, .assessment-dialog, .baseline-confirm, .baseline-missing { display: none; }

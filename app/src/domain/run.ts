@@ -97,6 +97,7 @@ export type ErrorCode =
   | 'command_conflict' | 'run_missing' | 'day_missing' | 'locked' | 'storage_open' | 'storage_read'
   | 'storage_write' | 'storage_blocked' | 'schema_changed'
   | 'unsupported_schema' | 'resource_load'
+  | 'technical_document_missing' | 'technical_version' | 'technical_points' | 'technical_incomplete' | 'technical_instructor'
 
 export class AppError<T = CreateRunFields> extends Error {
   readonly code: ErrorCode

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WorkspaceView } from '../application/run-application.ts'
 import { professionalTerms } from '../domain/run.ts'
 import type { DriverFields, DriverReference, FieldErrors } from '../domain/run.ts'
+import type { TechnicalSelection } from '../domain/technical-training.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 
 function DriverButton({ driver, runs, selected, busy, onSelect }: {
@@ -23,7 +24,7 @@ function DriverButton({ driver, runs, selected, busy, onSelect }: {
   )
 }
 
-export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, onSelect, onNewRun, onOpenRun }: {
+export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, onSelect, onNewRun, onOpenRun, onNewTechnical, onOpenTechnical }: {
   view: WorkspaceView
   busy: boolean
   selectingDriver: boolean
@@ -31,20 +32,28 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
   onSelect: (driverId: string) => void
   onNewRun: (driver: DriverReference) => void
   onOpenRun: (runId: string) => void
+  onNewTechnical: () => void
+  onOpenTechnical: (document: TechnicalSelection) => void
 }) {
   const [query, setQuery] = useState('')
   const search = query.trim().toLocaleLowerCase('nb-NO')
-  const matching = view.drivers.filter(driver =>
+  const instructor = view.actor.role === 'instruktør'
+  const matching = view.technicalDrivers.filter(driver =>
     [driver.name, driver.employeeNumber].some(value => value.toLocaleLowerCase('nb-NO').includes(search)),
   )
-  const selected = view.drivers.find(driver => driver.id === view.selectedDriverId)
-  const documents = view.runs.filter(run => run.driverId === selected?.id).sort((a, b) => b.firstDate.localeCompare(a.firstDate))
+  const selected = view.technicalDrivers.find(driver => driver.id === view.technicalDriverId)
+  const documents = instructor ? view.runs.filter(run => run.driverId === selected?.id)
+    .sort((a, b) => b.firstDate.localeCompare(a.firstDate)) : []
+  const technical = view.technicalDocuments.toSorted((a, b) => {
+    if ('error' in a) return 'error' in b ? a.documentId.localeCompare(b.documentId) : 1
+    return 'error' in b ? -1 : b.trainingDate.localeCompare(a.trainingDate)
+  })
   return (
     <>
-      <button type="button" className="button primary" aria-disabled={busy} onClick={onNewDriver}>Opprett sjåfør</button>
+      {instructor && <button type="button" className="button primary" aria-disabled={busy} onClick={onNewDriver}>Opprett sjåfør</button>}
       <section className="baseline-entry" aria-labelledby="driver-selection">
         <h2 id="driver-selection">Velg sjåfør</h2>
-        {view.drivers.length ? (
+        {view.technicalDrivers.length ? (
           <>
             <div className="field">
               <label htmlFor="driver-search">Søk etter navn eller ansattnummer</label>
@@ -53,7 +62,7 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
             </div>
             {matching.length ? <ul className="run-list">
               {matching.map(driver => (
-                <li key={driver.id}><DriverButton driver={driver} runs={view.runs} busy={busy}
+                <li key={driver.id}><DriverButton driver={driver} runs={instructor ? view.runs : []} busy={busy}
                   selected={driver.id === selected?.id} onSelect={onSelect} /></li>
               ))}
             </ul> : <p role="status">Ingen sjåfører passer søket.</p>}
@@ -65,9 +74,28 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
         <section className="baseline-entry" aria-labelledby="driver-documents">
           <h2 id="driver-documents">Dokumentasjon for {selected.name}</h2>
           <p>Ansattnummer {selected.employeeNumber} · Registrering {selected.id}</p>
-          <button type="button" className="button primary" aria-disabled={busy}
-            onClick={() => onNewRun(selected)}>Ny instruktørvurdering</button>
-          {documents.length ? <ul className="run-list">
+          <div className="actions">
+            <button type="button" className="button primary" aria-disabled={busy} onClick={onNewTechnical}>Ny teknisk opplæring</button>
+            {instructor && <button type="button" className="button primary" aria-disabled={busy}
+              onClick={() => onNewRun(selected)}>Ny instruktørvurdering</button>}
+          </div>
+          {(documents.length > 0 || technical.length > 0) ? <ul className="run-list">
+            {technical.map(document => (
+              <li key={document.documentId}>
+                <button type="button" className="run-button" aria-disabled={busy} onClick={() => onOpenTechnical(document)}>
+                  <span className="run-name">Teknisk opplæring</span>
+                  {'error' in document ? <span>Dokumentet kan ikke leses</span> : (
+                    <>
+                      <span>{document.busType || 'Busstype mangler'} · {document.trainingDate
+                        ? <CalendarDate value={document.trainingDate} /> : 'Dato mangler'}</span>
+                      <span className="run-status">{document.status === 'confirmed' ? 'Bekreftet' : 'Utkast'}</span>
+                      {document.ready && <span>Klar for instruktørbekreftelse</span>}
+                    </>
+                  )}
+                  <span>Dokumentreferanse {document.documentId}</span>
+                </button>
+              </li>
+            ))}
             {documents.map(run => (
               <li key={run.id}>
                 <button type="button" className="run-button" aria-disabled={busy} onClick={() => onOpenRun(run.id)}>
@@ -77,7 +105,7 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
                 </button>
               </li>
             ))}
-          </ul> : <p>Det er ingen vurderinger for denne registreringen.</p>}
+          </ul> : <p>{instructor ? 'Det er ingen vurderinger for denne registreringen.' : 'Det er ingen tekniske dokumenter for denne sjåføren.'}</p>}
         </section>
       )}
     </>

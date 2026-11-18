@@ -3,6 +3,7 @@ import type { DownloadRunPdf } from '../application/run-pdf.ts'
 import { PdfRenderingError } from '../application/run-pdf.ts'
 import { ClosureSnapshotError } from '../domain/closure.ts'
 import { AppError } from '../domain/run.ts'
+import { explain } from './app-errors.ts'
 
 type Props = { runId: string; busy: boolean; downloadRunPdf: DownloadRunPdf; report: (error: unknown) => void }
 
@@ -32,6 +33,23 @@ function errorMessage(error: unknown) {
 }
 
 export function RunPdfDownload({ runId, busy, downloadRunPdf, report }: Props) {
+  return <PdfDownload busy={busy} download={signal => downloadRunPdf(runId, signal)} report={report}
+    describeError={errorMessage} />
+}
+
+function technicalPdfError(error: unknown) {
+  if (error instanceof AppError && error.code === 'locked') return 'PDF er tilgjengelig når dokumentet er bekreftet og lagret.'
+  if (error instanceof AppError) return `PDF-en kunne ikke opprettes. ${explain(error)}`
+  if (error instanceof PdfRenderingError) return `PDF-en kunne ikke opprettes. ${error.message}`
+  return 'PDF-en kunne ikke opprettes. Prøv igjen.'
+}
+
+export function PdfDownload({ busy, download, report, describeError = technicalPdfError }: {
+  busy: boolean
+  download: (signal: AbortSignal) => Promise<{ blob: Blob; filename: string }>
+  report: (error: unknown) => void
+  describeError?: (error: unknown) => string
+}) {
   const attempt = useRef<AbortController>(undefined)
   const [generating, setGenerating] = useState(false)
   const [failure, setFailure] = useState('')
@@ -59,14 +77,14 @@ export function RunPdfDownload({ runId, busy, downloadRunPdf, report }: Props) {
     setNotice('Lager PDF …')
     setGenerating(true)
     try {
-      const { blob, filename } = await downloadRunPdf(runId, active.signal)
+      const { blob, filename } = await download(active.signal)
       if (active.signal.aborted) return
       downloadBlob(blob, filename)
       setNotice('PDF-filen er klar.')
     } catch (error) {
       if (active.signal.aborted) return
       report(error)
-      setFailure(errorMessage(error))
+      setFailure(describeError(error))
       setNotice('')
     } finally {
       if (attempt.current === active) {

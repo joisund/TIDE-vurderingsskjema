@@ -24,6 +24,11 @@ const messages: Record<ErrorCode, string> = {
   schema_changed: 'Det lokale lageret er endret av en annen appfane. Last inn den nyeste appversjonen på nytt.',
   unsupported_schema: 'Den åpne appversjonen støtter ikke formatet i det lokale lageret. Åpne en appversjon som støtter lageret.',
   resource_load: 'Appens ressurser kunne ikke lastes. Sjekk nettforbindelsen og prøv igjen.',
+  technical_document_missing: 'Det tekniske dokumentet finnes ikke for valgt sjåfør. Åpne dokumentoversikten på nytt.',
+  technical_version: 'Denne versjonen av malen, dokumentreglene eller PDF-oppsettet støttes ikke.',
+  technical_points: 'Sjekklisten samsvarer ikke med de 52 punktene i Volvo-malen.',
+  technical_incomplete: 'Den tekniske opplæringen mangler gyldige opplysninger. Kjør dokumentkontrollen på nytt.',
+  technical_instructor: 'Skriv navnet på instruktøren som bekrefter. Det må samsvare med instruktørnavnet i dokumentet.',
 }
 
 export function explain(error: unknown) {

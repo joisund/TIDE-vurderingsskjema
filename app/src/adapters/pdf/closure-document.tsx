@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
   confirmText: { marginTop: 3, borderTop: `0.5pt solid ${colors.grid}`, paddingTop: 2, fontSize: 8.5 },
 })
 
-function dateText(iso: string) {
+export function dateText(iso: string) {
   const [year, month, day] = iso.split('-')
   return `${day}.${month}.${year}`
 }
@@ -66,7 +66,7 @@ const osloTime = new Intl.DateTimeFormat('nb-NO', {
   timeZone: 'Europe/Oslo', timeZoneName: 'shortOffset',
 })
 
-function confirmationTime(iso: string) {
+export function confirmationTime(iso: string) {
   return osloTime.format(new Date(iso))
 }
 
@@ -82,7 +82,7 @@ function textWidth(text: string, fontSize: number, fontWeight: 400 | 700 = 400) 
   return font.layout(text).advanceWidth * fontSize / font.unitsPerEm
 }
 
-function flowing(text: string, width = 530, fontSize = 9, fontWeight: 400 | 700 = 400) {
+export function flowing(text: string, width = 530, fontSize = 9, fontWeight: 400 | 700 = 400) {
   return text.replace(/\S{15,}/gu, word => {
     const font = loadedFont(fontWeight)
     const limit = width * font.unitsPerEm / fontSize
@@ -105,7 +105,7 @@ function flowing(text: string, width = 530, fontSize = 9, fontWeight: 400 | 700 
   })
 }
 
-function assertGlyphs(texts: Iterable<string>) {
+export function assertGlyphs(texts: Iterable<string>) {
   const regular = loadedFont(400)
   const bold = loadedFont(700)
   const checked = new Set<number>()

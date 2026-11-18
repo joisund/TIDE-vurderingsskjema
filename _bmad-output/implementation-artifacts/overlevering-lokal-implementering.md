@@ -21,13 +21,27 @@ Arbeidet pågår på `codex/fadder-v1` i den eksisterende lokale arbeidskopien. 
 
 ## Story 3.1
 
+Story 3.1 er committet lokalt i `7db33e1a943a0d107f55b32090d2ce50384ad3f3`. Story 3.2 er startet fra den commiten med 52 kildeverifiserte tekniske opplæringspunkter. Oppdatert fremdrift står i [utviklerpakken](3-2-dokumentere-teknisk-opplæring-med-egen-bekreftelse-og-pdf.md).
+
 Den selvstendige S11-inngangen, stabil sjåførreferanse, instruktørkontekst og slutt-PDF er implementert fra PDF-commit c31ef18. Full Node-suite bestod med 67 prøver. Nettleserregresjon ga 275 av 276, med ett kjent WebKit-fokusavvik ved 200 % tekst. Identisk sluttbygg bestod 16 av 16 isolerte repetisjoner. Faktiske 1/2/3/5-løp, PDF med 242 svar, offline-nedlasting, S11, NVDA, 400 % zoom, schema 3 → 4 og bevaring av eldre PDF er kontrollert. Riktig rolle og bevart utkast er prøvd i Edge over to faner. Fysisk mobil, installasjon og mobilskjermleser gjenstår. [Storyens detaljer](3-1-bruke-felles-vurderingsskjema-som-instrukt%C3%B8r-og-knytte-dokum.md).
 
 Bruk portable Node fra oppstarten nedenfor og start frosset lokal instruktørprøve fra app-mappen:
 
     npm.cmd run preview -- --host 127.0.0.1 --port 4184 --strictPort --outDir ../.cache/story-3-1/verified-dist
 
-Åpne [instruktørprøven på PC](http://127.0.0.1:4184). Velg Instruktør, opprett en helt fiktiv sjåfør og prøv en ny registrering med samme navn og nummer. Velg den første uttrykkelig. Start en instruktørvurdering for den. Bytt mellom Sjåfør og Instruktør og kontroller historiske navn i dagens bekreftelser og PDF. Prøv faktisk ordinært faneskifte etter aktivt rollebytte i en annen fane. Den separate fysiske fokusprøven ble hindret av Windows-overflaten. Fadderens stabile prøve lever videre på port 4183.
+Åpne [instruktørprøven på PC](http://127.0.0.1:4184). Velg Instruktør, opprett en helt fiktiv sjåfør og prøv en ny registrering med samme navn og nummer. Velg den første uttrykkelig. Start en instruktørvurdering for den. Bytt mellom Sjåfør og Instruktør og kontroller historiske navn i dagens bekreftelser og PDF. Ordinært faneskifte med Ctrl+1 i Edge skjulte historikk og PDF etter rollebytte i den andre fanen. Fadderens stabile prøve lever videre på port 4183.
+
+## Story 3.2
+
+Teknisk opplæring er prøvd i en tidlig kandidat fra S11 til bekreftet, selvstendig PDF fra begge roller. Kildekontroll viser riktig 13/13/14/12. Edge har prøvd både 52 gjennomgått og blandet føring, avbrutt lagring før complete, bevart inntasting ved avvist rollebytte, foreldet kontroll i en annen fane og atomisk bekreftelsesretry. WebKit opprettet, fylte, bekreftet og eksporterte etter 60 046 ms uten nettforespørsler. Windows Edge med NVDA leste opp navngitt avkryssing, feltfeil, dialog og lagringsstatus. Faktisk 400 % Chromium-zoom og de vedtatte CSS-breddene ble prøvd på PC. Oppgraderingen fra schema 4 bevarte begge PDF-typene og fem eldre vurderingsløp.
+
+Første prøvesett avdekket sidetall utenfor sideflaten og titteloverlapp på forsiden. Begge layoutfeil ble rettet og kontrollert i en ny faktisk eksport med ni stående A4-sider, alle 52 punkter, to aktive begrunnelser på 10 000 tegn og ett ettordsunntak. Edges innebygde leser ga ett treff på tekst helt sist i den andre lange begrunnelsen. Tre uavhengige kodegjennomganger ble fulgt opp med blant annet avgrenset dokumentfeil, gjenoppretting fra konflikt, fjerning av gammel DOM fra tilbakebuffer og fungerende første klikk i vedvarende Firefox. Sluttbygget bestod 73 Node-prøver og 287 av 288 nettleserprøver. Én Chromium-prøve fikk en Windows-nettverksfeil før lasting og bestod fire av fire forsøk på samme sluttbygg isolert. Seks tekniske PDF-er i tre motorer ble lest uavhengig fra appen. Fysisk prøve står i review. [Storyens detaljer](3-2-dokumentere-teknisk-opplæring-med-egen-bekreftelse-og-pdf.md).
+
+Bruk portable Node og start frosset teknisk PC-prøve fra app-mappen:
+
+    npm.cmd run preview -- --host 127.0.0.1 --port 4185 --strictPort --outDir ../.cache/story-3-2/verified-dist
+
+Åpne [teknisk prøve på PC](http://127.0.0.1:4185). Velg en fiktiv sjåfør under Instruktør, opprett teknisk opplæring, og bytt til Sjåfør for å føre 52 punkter med minst ett begrunnet kjøretøyunntak. Bytt tilbake, kontroller og oppgi samme instruktørnavn ved bekreftelsen. Åpne PDF fra begge roller og sjekk at riktig person fremgår som utfyller og bekrefter. Port 4183 og 4184 har de tidligere frosne fadder- og instruktørprøvene. Hver port har eget lokalt lager.
 
 ## Lokal oppstart
 

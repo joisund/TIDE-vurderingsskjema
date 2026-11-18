@@ -26,6 +26,12 @@ import {
   checkClosureDays, conclusionDraft, validateCloseRunCommand, validateSavedClosure, validateSaveConclusionCommand,
 } from '../domain/closure.ts'
 import type { CloseRunCommand, ConclusionDraft, ConclusionStatus, SaveConclusionCommand } from '../domain/closure.ts'
+import {
+  checkTechnicalTraining, technicalDocumentType, technicalExportSource, validateTechnicalCommand,
+} from '../domain/technical-training.ts'
+import type {
+  ConfirmTechnicalTraining, CreateTechnicalTraining, SaveTechnicalTraining, TechnicalCommand, TechnicalCreateFields, TechnicalPoint, TechnicalSelection,
+} from '../domain/technical-training.ts'
 
 function historicalRun(run: Run): Run {
   return run.lifecycle === 'closed' && run.closureSnapshot
@@ -131,12 +137,23 @@ function toView(state: WorkspaceState) {
   const plan = run && currentPlan(run)
   const closure = run?.closureSnapshot
   const professional = run && role === assessmentContext(run)
+  const technical = state.technical
   return {
     actor: { ...state.session.actor },
     runs: state.runs.map(summary),
     blocked,
     drivers: role === 'instruktør' ? state.drivers : [],
     selectedDriverId: role === 'instruktør' ? state.session.driverId : undefined,
+    technicalDrivers: role === 'fadder' ? [] : state.drivers,
+    technicalDriverId: role === 'fadder' ? undefined : state.session.driverId,
+    technicalDocuments: state.technicalDocuments,
+    technicalProblem: state.technicalProblem,
+    technical: technical && {
+      ...technical,
+      points: role === 'sjåfør' && technical.status === 'draft' ? technical.points
+        : technical.points.map<TechnicalPoint>(({ id, status, author, reason }) => ({ id, status, author, reason })),
+      issues: technical.status === 'draft' ? checkTechnicalTraining(technical, state.technicalDriverActorId, technical.revision) : [],
+    },
     selected: run && day && plan && {
       ...summary(run),
       ...historyDay(run, day, role, Boolean(closure)),
@@ -171,6 +188,12 @@ function toView(state: WorkspaceState) {
 
 export type WorkspaceView = ReturnType<typeof toView>
 export type DayView = NonNullable<WorkspaceView['selected']>
+export type TechnicalView = NonNullable<WorkspaceView['technical']>
+
+function canonicalCommand(command: TechnicalCommand) {
+  return JSON.stringify(command, (_key, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)
+}
 
 export function confirmationView(day: DayView, command: ConfirmBaselineCommand, receipt: RunReceipt): DayView {
   const { baseline } = day
@@ -530,6 +553,48 @@ export class RunApplication {
     if (run.lifecycle !== 'closed') throw new AppError('locked')
     validateSavedClosure(run)
     return run.closureSnapshot!
+  }
+
+  newCreateTechnicalCommand(actor: Actor, driverRef: string, fields: TechnicalCreateFields): CreateTechnicalTraining {
+    return {
+      kind: 'create-technical-training', documentType: technicalDocumentType, documentId: this.#newId(),
+      commandId: this.#newId(), actor: { ...actor }, driverRef, expectedRevision: 0, payload: { ...fields },
+    }
+  }
+
+  newSaveTechnicalCommand(actor: Actor, document: TechnicalSelection & { driverRef: string; revision: number },
+    payload: SaveTechnicalTraining['payload']): SaveTechnicalTraining {
+    return {
+      kind: 'save-technical-training', documentType: document.documentType, documentId: document.documentId,
+      commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision, payload,
+    }
+  }
+
+  newConfirmTechnicalCommand(actor: Actor, document: TechnicalSelection & { driverRef: string; revision: number },
+    instructorName: string): ConfirmTechnicalTraining {
+    return {
+      kind: 'confirm-technical-training', documentType: document.documentType, documentId: document.documentId,
+      commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision,
+      payload: { instructorName, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  async executeTechnical(command: TechnicalCommand) {
+    validateTechnicalCommand(command)
+    const snapshot = structuredClone(command)
+    return this.#store.executeTechnical(snapshot, canonicalCommand(snapshot))
+  }
+
+  async selectTechnical(selection: TechnicalSelection) {
+    return toView(await this.#store.selectTechnical(selection))
+  }
+
+  async readTechnical(selection: TechnicalSelection) {
+    return this.#store.readTechnical(selection)
+  }
+
+  async readTechnicalSnapshot(selection: TechnicalSelection, requireSelected = false) {
+    return technicalExportSource(await this.#store.readTechnical(selection, requireSelected))
   }
 
   async read(selection?: Selection) {

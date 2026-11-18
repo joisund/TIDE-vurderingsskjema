@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { RunApplication, WorkspaceView } from '../application/run-application.ts'
+import { flushSync } from 'react-dom'
+import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import { AppError, validateCreateRun } from '../domain/run.ts'
 import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
 import { CreateRunForm } from './CreateRunForm.tsx'
+import { CalendarDate } from './CalendarDate.tsx'
+import { DayDraftForm } from './DayDraftForm.tsx'
+import type { DayDraftHandle } from './DayDraftForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 
 type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day'
@@ -26,11 +30,6 @@ const headings: Record<Screen, string> = {
   day: 'Dagsoversikt',
 }
 
-function CalendarDate({ value }: { value: string }) {
-  const [year, month, day] = value.split('-')
-  return <time dateTime={value}>{day}.{month}.{year}</time>
-}
-
 export function App({ application, logo, prepare, requestPersistence, report }: Props) {
   const [screen, setScreen] = useState<Screen>('loading')
   const [view, setView] = useState<WorkspaceView>()
@@ -42,6 +41,10 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const [receipt, setReceipt] = useState<RunReceipt>()
   const [busy, setBusy] = useState(false)
   const [storageStatus, setStorageStatus] = useState('')
+  const [navigationError, setNavigationError] = useState('')
+  const [online, setOnline] = useState(() => navigator.onLine)
+  const dayDraft = useRef<DayDraftHandle>(null)
+  const roleSelect = useRef<HTMLSelectElement>(null)
   const inFlight = useRef(false)
   const attempt = useRef<{ fields: CreateRunFields; command: CreateRunCommand }>(undefined)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -87,6 +90,16 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     }
   }, [screen])
 
+  useEffect(() => {
+    const updateNetwork = () => setOnline(navigator.onLine)
+    window.addEventListener('online', updateNetwork)
+    window.addEventListener('offline', updateNetwork)
+    return () => {
+      window.removeEventListener('online', updateNetwork)
+      window.removeEventListener('offline', updateNetwork)
+    }
+  }, [])
+
   function navigate(next: Screen) {
     focusHeading.current = true
     setScreen(next)
@@ -96,6 +109,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
+    setNavigationError('')
     try {
       await action()
     } finally {
@@ -143,21 +157,28 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
 
   function showRuns() {
     void perform(async () => {
+      if (dayDraft.current && !await dayDraft.current.flush()) return
       try {
-        setView(await application.read())
+        setView(await application.withOpenStorage(() => application.read()))
         setStorageStatus('')
         navigate('runs')
       } catch (error) {
-        focusHeading.current = true
-        fail(error)
+        if (selected) {
+          report(error)
+          setNavigationError('Løpsoversikten kunne ikke åpnes. ' + explain(error))
+        } else {
+          focusHeading.current = true
+          fail(error)
+        }
       }
     })
   }
 
   function openRun(id: string) {
     void perform(async () => {
+      if (dayDraft.current && !await dayDraft.current.flush()) return
       try {
-        setView(await application.select(id))
+        setView(await application.withOpenStorage(() => application.select(id)))
         setStorageStatus('')
         navigate('day')
       } catch (error) {
@@ -170,21 +191,61 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   function changeRole(role: Role) {
     if (view?.actor.role === role) return
     void perform(async () => {
+      if (dayDraft.current && !await dayDraft.current.flush()) return
       try {
-        setView(await application.changeRole(role, selected && { runId: selected.id, dayId: selected.dayId }))
+        const next = await application.withOpenStorage(() =>
+          application.changeRole(role, selected && { runId: selected.id, dayId: selected.dayId }),
+        )
+        replaceRoleView(next)
       } catch (error) {
-        focusHeading.current = true
-        fail(error)
+        report(error)
+        setNavigationError('Rollebyttet kunne ikke fullføres. ' + explain(error))
       }
     })
+  }
+
+  function replaceRoleView(next: WorkspaceView) {
+    const returnFocus = roleSelect.current === document.activeElement
+    flushSync(() => {
+      setView(undefined)
+      setFields(emptyFields)
+      setErrors({})
+      setProblem(undefined)
+      setReceipt(undefined)
+      setStorageStatus('')
+      attempt.current = undefined
+    })
+    flushSync(() => { setView(next) })
+    if (returnFocus) roleSelect.current?.focus()
+  }
+
+  function acceptDaySave(saved: DayView) {
+    setView(current => {
+      if (!current?.selected || current.selected.id !== saved.id || current.selected.dayId !== saved.dayId) return current
+      return {
+        ...current,
+        selected: {
+          ...saved,
+          plannedLastDate: saved.day === saved.plannedLastDay ? saved.fields.date : saved.plannedLastDate,
+        },
+      }
+    })
+  }
+
+  function adoptStoredDay(stored: WorkspaceView) {
+    if (view?.actor.id !== stored.actor.id || view?.actor.role !== stored.actor.role) {
+      replaceRoleView(stored)
+      heading.current?.focus()
+    }
+    else setView(stored)
   }
 
   function refreshDraft() {
     void perform(async () => {
       try {
         const current = view?.actor.role === 'sjåfør'
-          ? await application.changeRole('fadder')
-          : await prepare()
+          ? await application.withOpenStorage(() => application.changeRole('fadder'))
+          : await application.open()
         setView(current)
         setProblem(current.actor.role === 'fadder' ? undefined : new AppError('wrong_role'))
       } catch (error) {
@@ -194,10 +255,9 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  async function loadCommitted(saved: RunReceipt, reopen = false) {
+  async function loadCommitted(saved: RunReceipt) {
     try {
-      if (reopen) await prepare()
-      setView(await application.select(saved.runId, saved.dayId))
+      setView(await application.withOpenStorage(() => application.select(saved.runId, saved.dayId)))
       navigate('day')
     } catch (error) {
       report(error)
@@ -206,7 +266,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   }
 
   function retryCommitted() {
-    if (receipt) void perform(() => loadCommitted(receipt, problem?.code === 'storage_open'))
+    if (receipt) void perform(() => loadCommitted(receipt))
   }
 
   function submit() {
@@ -226,8 +286,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       setProblem(undefined)
       setStorageStatus('Lagrer …')
       try {
-        if (problem?.code === 'storage_open') await prepare()
-        const saved = await application.executeCreate(command)
+        const saved = await application.withOpenStorage(() => application.executeCreate(command))
         setReceipt(saved)
         setStorageStatus('Lagret på denne enheten')
         await loadCommitted(saved)
@@ -261,6 +320,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                       <label htmlFor="simulation-role">Simuleringsrolle</label>
                       <select
                         id="simulation-role"
+                        ref={roleSelect}
                         value={view.actor.role}
                         aria-disabled={busy}
                         onChange={event => changeRole(event.currentTarget.value === 'sjåfør' ? 'sjåfør' : 'fadder')}
@@ -271,13 +331,15 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                     </>}
               </div>
             )}
-            {selected && <p className="day-context">{selected.driverName} · Dag {selected.day}</p>}
+            {selected && <p className="day-context">{selected.fields.driverName || 'Sjåførnavn mangler'} · Dag {selected.day}</p>}
+            {view && <p className="network-status" aria-live="polite">{online ? 'Nett tilkoblet' : 'Uten nett'}</p>}
           </div>
         </div>
       </header>
       <main className="content">
         <h1 ref={heading} tabIndex={-1}>{headings[screen]}</h1>
-        <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>
+        {screen !== 'day' && <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>}
+        {navigationError && <p className="error-panel" role="alert">{navigationError}</p>}
         {screen === 'loading' && <p role="status">Åpner lokalt lager og laster løp …</p>}
         {screen === 'unavailable' && (
           <section aria-label="Lagringsfeil">
@@ -319,26 +381,19 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
               onChange={updateField} onSubmit={submit} onCancel={showRuns} onRefresh={refreshDraft} />
           </>
         )}
-        {selected && (
+        {selected && view && (
           <>
             <p className="run-status">{selected.status}</p>
             <dl className="details">
-              <div><dt>Sjåførnavn</dt><dd>{selected.driverName}</dd></div>
-              <div><dt>Ansattnummer</dt><dd>{selected.employeeNumber}</dd></div>
-              <div><dt>Faddernavn</dt><dd>{selected.mentorName}</dd></div>
               <div>
                 <dt>Planlagt siste dag</dt>
                 <dd>Dag {selected.plannedLastDay}</dd>
                 <dd>{selected.plannedLastDate ? <CalendarDate value={selected.plannedLastDate} /> : 'Dato ikke registrert'}</dd>
               </div>
             </dl>
-            <section aria-labelledby="first-day">
-              <h2 className="category" id="first-day">Dag {selected.day}</h2>
-              <dl className="details day-details">
-                <div><dt>Dato</dt><dd><CalendarDate value={selected.firstDate} /></dd></div>
-                <div><dt>Identitet, dato og tilhørighet</dt><dd>Ikke bekreftet</dd></div>
-              </dl>
-            </section>
+            <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={dayDraft}
+              initial={selected} actor={view.actor} application={application} report={report}
+              onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} />
             <div className="actions">
               <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
             </div>

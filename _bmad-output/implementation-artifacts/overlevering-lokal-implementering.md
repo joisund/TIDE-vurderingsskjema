@@ -6,7 +6,8 @@ Arbeidet pågår på `codex/fadder-v1` i den eksisterende lokale arbeidskopien. 
 
 - Maskinens Node 24.19.0 og npm 11.17.0 avviker fra vedtatt oppsett. Den offisielle Windows x64-zipen for Node 26.13.0 ble SHA256-kontrollert mot leverandørens publiserte verdi. Lokal utpakking i `.cache/story-1-1/node-v26.13.0-win-x64` gir Node 26.13.0 og npm 11.20.0 uten maskinvid endring.
 - `create-vite@9.3.3` med `--template react-ts` opprettet `app/`. Offentlig npm-registry var tilgjengelig ved godkjent nettverkstilgang etter DNS-feil i standard sandkasse.
-- Story 1.1 har lokal, kodegjennomgått implementering. Ren låst installasjon, bygg/typekontroll, lint, 11 Node-prøver og 39 nettleserprøver passerte. Storyen står i review for faktisk skjermleser og fysisk enhetsprøving. Alle tre automatiserte nettlesere gjenåpnet to fiktive løp med én dag hver på under to sekunder. Neste implementeringsstory er 1.2, øktfelter og autosave.
+- Story 1.1 har lokal, kodegjennomgått implementering i `9f4bae73d9a9785c560c10ea6faedf33ee346787`. Ren låst installasjon, bygg/typekontroll, lint, 11 Node-prøver og 39 nettleserprøver passerte. Storyen står i review for faktisk skjermleser og fysisk enhetsprøving. Alle tre automatiserte nettlesere gjenåpnet to fiktive løp med én dag hver på under to sekunder.
+- Story 1.2 (øktfelter og autosave) er implementert og kodegjennomgått. Etter reviewretting bestod bygg/typekontroll, lint, 21 Node-prøver og 81 nettleserprøver. Alle tre motorene lagret etter over 60 sekunder frakoblet. Nettleserzoom ved 400 % med åpen feltkontroll ble prøvd separat. Storyen står i review for enhets- og hjelpemiddelprøving. [Utviklerpakken](1-2-registrere-og-bevare-dagens-øktopplysninger.md) har funn og testresultater. Neste tekniske oppgave er Story 1.3, engangs-førvurderingen og førlåsen.
 
 ## Lokal oppstart
 
@@ -27,6 +28,8 @@ npm.cmd run dev -- --port 5173 --strictPort
 
 En separat lokal Vite 8.3.5-side lastet begge fonter med `Font.load` før registrering. Etter simulert nettbrudd genererte og lastet Chromium 151.0.7922.34, Firefox 153.0 og WebKit 26.5 ned en PDF med gyldig filheader. WebKit feilet først da prøveprogrammet forsøkte `Blob.slice(...).text()` før nedlasting. Kontroll av selve nedlastingen passerte. Vurderingsinnhold, appens nedlastingsflate, lengre tekster og faktisk mobilåpning verifiseres i Story 2.2.
 
+En separat Node-prøve fordelte 10 000 tegn med fiktiv tekst på to stående A4-sider. Gjentatt overskrift og riktige sidetall ble kontrollert visuelt. Tekstuttrekket matchet alle tegn utenom linjebryting og blanktegn. Komplett eksport med faktisk vurderingsdata gjenstår.
+
 Testet fontgrunnlag er de statiske TTF-filene fra `NotoSans/full/ttf/` i [Noto Sans v2.014](https://github.com/notofonts/latin-greek-cyrillic/releases/tag/NotoSans-v2.014), SIL Open Font License 1.1.
 
 | Fil | SHA256 |
@@ -38,3 +41,5 @@ Testet fontgrunnlag er de statiske TTF-filene fra `NotoSans/full/ttf/` i [Noto S
 ## Praktisk prøve
 
 Fast HTTPS-origin og faktisk prøving etter [nettbrettprotokollen](nettbrett-testprotokoll-2026-11-20.md) gjenstår. Sett av holdepunkt for Lenovo Pad / Android / Brave på mobil hotspot, og bruk samme origin og profil mellom fadderdagene. Bruk fiktive personer.
+
+NVDA 2026.3.1 i Edge leste «Løpsoversikt» og «Opprett løp» i den isolerte Windows-prøven 18. november. Edge-tilgang ble verifisert. En Windows-brannmurmelding for en lokal Node-prosess lå foran vinduet. Manuell opplesing av feltnavn, feltfeil og lagringsstatus gjenstår.

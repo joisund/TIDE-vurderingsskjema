@@ -19,10 +19,11 @@
 
 body { margin: 0; overflow-wrap: anywhere; }
 
-h1, h2, p, ul, dl, dd { margin: 0; }
+h1, h2, h3, p, ul, dl, dd { margin: 0; }
 
 h1 { margin-block: 8px; font-size: 1.5625rem; line-height: 1.2; }
 h2 { font-size: 1.125rem; line-height: 1.35; }
+h3 { font-size: 1rem; line-height: 1.35; }
 
 input, select, button { font: inherit; color: inherit; }
 
@@ -52,6 +53,7 @@ a { color: var(--primary); }
 .profile-context { flex: 1 1 12rem; min-width: 0; font-size: .875rem; }
 .app-name { font-weight: 650; line-height: 1.2; }
 .day-context { margin-top: 4px; }
+.network-status { margin-top: 4px; font-size: .75rem; }
 
 .role {
   display: flex;
@@ -102,7 +104,7 @@ a { color: var(--primary); }
 .create-form, .form-fields { display: grid; gap: 16px; }
 .field { min-width: 0; }
 
-label, dt { display: block; font-size: .875rem; font-weight: 650; }
+label, dt, .field-label { display: block; font-size: .875rem; font-weight: 650; }
 
 input, select {
   width: 100%;
@@ -162,4 +164,37 @@ input, select {
   padding: 4px 6px 4px 10px;
   font-size: .8125rem;
   font-weight: 750;
+}
+
+.day-state, .day-problem, .saved-snapshot, .day-fields, .field-check { margin-block: 12px; }
+.day-details { margin-block: 0; }
+.day-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); }
+.read-value { margin-top: 4px; }
+.day-problem .error-panel + .button { margin-top: 8px; }
+
+.saved-snapshot, .field-check {
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius);
+  padding: 0 12px 12px;
+}
+
+.saved-snapshot { padding-top: 12px; }
+.saved-snapshot h3 + p, .field-check h3 + p, .field-check ul { margin-top: 6px; }
+.field-check h3 { margin-top: 12px; }
+.field-check:not([open]) { padding-bottom: 0; }
+.field-check ul { padding-inline-start: 24px; }
+
+.field-check summary {
+  min-height: 48px;
+  padding-block: 12px;
+  color: var(--primary);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.field-check a { display: inline-flex; align-items: center; min-height: 44px; }
+.content > .error-panel, .content > .actions { margin-block: 12px; }
+
+@media (max-width: 480px) {
+  .day-fields input { font-size: 1rem; }
 }

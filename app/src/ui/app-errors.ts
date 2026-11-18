@@ -9,6 +9,8 @@ const messages: Record<ErrorCode, string> = {
   stale: 'Løpsoversikten eller den aktive rollen er endret i en annen fane. Last inn gjeldende tilstand før du prøver igjen.',
   command_conflict: 'Opprettingsforsøket samsvarer ikke med det tidligere forsøket. Gå til løpsoversikten og sjekk om løpet allerede er lagret.',
   run_missing: 'Det valgte løpet kunne ikke finnes. Last inn løpsoversikten på nytt.',
+  day_missing: 'Den valgte dagen kunne ikke finnes i løpet.',
+  locked: 'Feltet er låst og kan ikke endres.',
   storage_open: 'Det lokale lageret kan ikke åpnes. Sjekk at nettleseren tillater lagring for dette nettstedet, og prøv igjen.',
   storage_read: 'Løpsopplysningene kunne ikke leses fra det lokale lageret. Prøv igjen.',
   storage_write: 'Det lokale lageret kan ikke skrives til. Sjekk nettleserens lagringstillatelse og ledig plass, og prøv igjen.',

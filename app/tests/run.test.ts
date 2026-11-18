@@ -49,6 +49,7 @@ test('lagrer alle tre startplaner og skuddår som uendret kalenderdato', async (
     assert.equal(run.initialLastDay, plan)
     assert.deepEqual(run.firstDay, {
       id: receipt.dayId, number: 1, date: fields.firstDate, driverId: run.driver.id,
+      driverIdentity: { name: fields.driverName, employeeNumber: fields.employeeNumber },
       mentorName: fields.mentorName, identityConfirmed: false,
     })
     assert.equal(run.driver.id, command.payload.driverId)

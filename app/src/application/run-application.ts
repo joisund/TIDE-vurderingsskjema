@@ -1,13 +1,16 @@
-import { AppError, createRun, validateContent, validateCreateIds } from '../domain/run.ts'
+import { AppError, createRun, dayLocks, findDay, runDays, validateContent, validateCreateIds } from '../domain/run.ts'
 import type { Actor, ContentSnapshot, CreateRunCommand, CreateRunFields, Role, Run } from '../domain/run.ts'
+import { dayDraft, dayFieldAccess, dayFields, validateDayDraftCommand } from '../domain/day-draft.ts'
+import type { DayChanges, SaveDayDraftCommand } from '../domain/day-draft.ts'
 import type { RunStore, Selection, WorkspaceState } from './run-store.ts'
 
 function summary(run: Run) {
+  const identity = run.firstDay.driverIdentity ?? run.driver
   return {
     id: run.id,
-    status: 'Pågående',
-    driverName: run.driver.name,
-    employeeNumber: run.driver.employeeNumber,
+    status: run.lifecycle === 'closed' ? 'Avsluttet' : 'Pågående',
+    driverName: identity.name,
+    employeeNumber: identity.employeeNumber,
     firstDate: run.firstDay.date,
   }
 }
@@ -15,22 +18,27 @@ function summary(run: Run) {
 function toView(state: WorkspaceState) {
   const selection = state.session.selection
   const run = state.runs.find(item => item.id === selection?.runId)
-  if (selection && (!run || run.firstDay.id !== selection.dayId)) throw new AppError('storage_read')
+  const day = run && selection && findDay(run, selection.dayId)
+  if (selection && (!run || !day)) throw new AppError('storage_read')
   return {
-    actor: state.session.actor,
+    actor: { ...state.session.actor },
     runs: state.runs.map(summary),
-    selected: run && {
+    selected: run && day && {
       ...summary(run),
-      dayId: run.firstDay.id,
-      day: run.firstDay.number,
-      mentorName: run.firstDay.mentorName,
+      dayId: day.id,
+      day: day.number,
+      revision: run.revision,
+      fields: dayDraft(run, day),
+      access: dayFieldAccess(run, day, state.session.actor.role),
+      ...dayLocks(run, day),
       plannedLastDay: run.initialLastDay,
-      plannedLastDate: run.initialLastDay === 1 ? run.firstDay.date : undefined,
+      plannedLastDate: runDays(run).find(item => item.number === run.initialLastDay)?.date,
     },
   }
 }
 
 export type WorkspaceView = ReturnType<typeof toView>
+export type DayView = NonNullable<WorkspaceView['selected']>
 
 function fingerprint({ actor, expectedRevision, runId, payload }: CreateRunCommand): string {
   return JSON.stringify([
@@ -56,11 +64,21 @@ export class RunApplication {
     return toView(await this.#store.open({ fadder: this.#newId(), sjåfør: this.#newId() }))
   }
 
+  async withOpenStorage<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'storage_open') throw error
+    }
+    await this.open()
+    return operation()
+  }
+
   newCreateCommand(actor: Actor, fields: CreateRunFields): CreateRunCommand {
     return {
       commandId: this.#newId(),
       runId: this.#newId(),
-      actor,
+      actor: { ...actor },
       expectedRevision: 0,
       payload: { ...fields, driverId: this.#newId(), dayId: this.#newId() },
     }
@@ -72,8 +90,33 @@ export class RunApplication {
     return this.#store.create(snapshot, fingerprint(snapshot), () => createRun(snapshot, this.#content))
   }
 
-  async read() {
-    return toView(await this.#store.read())
+  newDayDraftCommand(actor: Actor, selection: Selection, expectedRevision: number, changes: DayChanges): SaveDayDraftCommand {
+    return {
+      commandId: this.#newId(),
+      runId: selection.runId,
+      actor: { ...actor },
+      expectedRevision,
+      payload: { dayId: selection.dayId, changes: { ...changes } },
+    }
+  }
+
+  async executeDayDraft(command: SaveDayDraftCommand) {
+    const snapshot = {
+      ...command,
+      actor: { ...command.actor },
+      payload: { ...command.payload, changes: { ...command.payload?.changes } },
+    }
+    validateDayDraftCommand(snapshot)
+    const { runId, actor, expectedRevision, payload } = snapshot
+    const fingerprint = JSON.stringify([
+      'save-day-draft', runId, actor.id, actor.role, expectedRevision, payload.dayId,
+      dayFields.filter(field => field in payload.changes).map(field => [field, payload.changes[field]]),
+    ])
+    return this.#store.saveDayDraft(snapshot, fingerprint)
+  }
+
+  async read(selection?: Selection) {
+    return toView(await this.#store.read(selection))
   }
 
   async select(runId: string, dayId?: string) {

@@ -10,7 +10,7 @@ export type CreateRunFields = {
   initialLastDay: string
 }
 
-export type FieldErrors = Partial<Record<keyof CreateRunFields, string>>
+export type FieldErrors<T = CreateRunFields> = Partial<Record<keyof T, string>>
 
 export type Criterion = { id: string; title: string; help: string }
 export type ContentSnapshot = {
@@ -20,22 +20,34 @@ export type ContentSnapshot = {
   criteria: readonly Criterion[]
 }
 
-export type FirstDay = {
+export type Confirmation = { actor: Actor & { name: string }; confirmedAt: string }
+export type SessionFields = { bus1: string; bus2: string; routes: string; startTime: string; endTime: string }
+
+export type Day = {
   id: string
-  number: 1
+  number: 1 | 2 | 3 | 4 | 5
   date: string
   driverId: string
+  driverIdentity?: { name: string; employeeNumber: string }
   mentorName: string
-  identityConfirmed: false
+  mentorNameDraft?: string
+  identityConfirmed: boolean
+  driverConfirmation?: Confirmation
+  mentorConfirmation?: Confirmation
+  session?: SessionFields
 }
+
+export type FirstDay = Day & { number: 1 }
 
 export type Run = {
   id: string
   revision: number
-  lifecycle: 'open'
+  lifecycle: 'open' | 'closed'
   driver: { id: string; name: string; employeeNumber: string }
   initialLastDay: StartPlan
   firstDay: FirstDay
+  laterDays?: (Day & { number: 2 | 3 | 4 | 5 })[]
+  baselineConfirmation?: Confirmation
   content: ContentSnapshot
 }
 
@@ -51,15 +63,15 @@ export type RunReceipt = { runId: string; dayId: string; revision: number }
 
 export type ErrorCode =
   | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale'
-  | 'command_conflict' | 'run_missing' | 'storage_open' | 'storage_read'
+  | 'command_conflict' | 'run_missing' | 'day_missing' | 'locked' | 'storage_open' | 'storage_read'
   | 'storage_write' | 'storage_blocked' | 'schema_changed'
   | 'unsupported_schema' | 'resource_load'
 
-export class AppError extends Error {
+export class AppError<T = CreateRunFields> extends Error {
   readonly code: ErrorCode
-  readonly fields: FieldErrors
+  readonly fields: FieldErrors<T>
 
-  constructor(code: ErrorCode, fields: FieldErrors = {}) {
+  constructor(code: ErrorCode, fields: FieldErrors<T> = {}) {
     super(code)
     this.code = code
     this.fields = fields
@@ -85,7 +97,7 @@ export function validateContent(content: ContentSnapshot): void {
 
 // Datoen er den valgte kalenderdatoen i Europe/Oslo. Den representeres aldri som et tidspunkt.
 export function isCalendarDate(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  if (typeof value !== 'string' || value.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const [year, month, day] = value.split('-').map(Number)
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
   const monthLengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -110,7 +122,7 @@ export function validateCreateRun(fields: CreateRunFields): FieldErrors {
   return errors
 }
 
-function hasText(value: unknown): value is string {
+export function hasText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
@@ -125,14 +137,63 @@ export function validateCreateIds(command: CreateRunCommand) {
   }
 }
 
+function isConfirmation(confirmation: Confirmation, role: Role) {
+  const time = confirmation?.confirmedAt
+  return isId(confirmation?.actor?.id) && confirmation.actor.role === role && hasText(confirmation.actor.name)
+    && typeof time === 'string' && isCalendarDate(time.slice(0, 10))
+    && /^T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?Z$/.test(time.slice(10))
+    && time.endsWith('Z')
+}
+
+export function dayLocks(run: Run, day: Day) {
+  const dayLocked = run.lifecycle === 'closed' || Boolean(day.mentorConfirmation)
+  const identityLocked = dayLocked || day.identityConfirmed
+    || Boolean(day.number === 1 ? run.baselineConfirmation : day.driverConfirmation)
+  return { dayLocked, identityLocked }
+}
+
 export function validateSavedRun(run: Run) {
-  if (!isId(run?.id) || run.lifecycle !== 'open' || !isId(run.driver?.id)
+  if (!isId(run?.id) || !['open', 'closed'].includes(run.lifecycle) || !isId(run.driver?.id)
     || !hasText(run.driver.name) || !hasText(run.driver.employeeNumber)
-    || !isId(run.firstDay?.id) || run.firstDay.driverId !== run.driver.id || run.firstDay.number !== 1
-    || !hasText(run.firstDay.mentorName) || !isCalendarDate(run.firstDay.date)
+    || !Number.isSafeInteger(run.revision) || run.revision < 1
+    || !run.firstDay || (run.laterDays !== undefined && !Array.isArray(run.laterDays))
+    || (run.baselineConfirmation !== undefined && !isConfirmation(run.baselineConfirmation, 'sjåfør'))
     || ![1, 2, 3].includes(run.initialLastDay)) {
     throw new AppError('storage_read')
   }
+  const days = runDays(run)
+  const ids = new Set<string>()
+  let previousDate = ''
+  for (const [index, day] of days.entries()) {
+    const locks = day && dayLocks(run, day)
+    if (!isId(day?.id) || ids.has(day.id) || day.driverId !== run.driver.id
+      || day.number !== index + 1 || day.number > 5 || typeof day.identityConfirmed !== 'boolean'
+      || !hasText(day.mentorName) || !isCalendarDate(day.date) || day.date <= previousDate
+      || (day.mentorNameDraft !== undefined && (typeof day.mentorNameDraft !== 'string' || hasText(day.mentorNameDraft)))
+      || (day.driverConfirmation !== undefined && !isConfirmation(day.driverConfirmation, 'sjåfør'))
+      || (day.mentorConfirmation !== undefined && !isConfirmation(day.mentorConfirmation, 'fadder'))
+      || (day.identityConfirmed && !(day.number === 1 ? run.baselineConfirmation : day.driverConfirmation))
+      // 1.1 lagret ingen bekreftede dager. Bare ulåst identitet kan falle tilbake på løpsprofilen.
+      || (locks.identityLocked && (!hasText(day.driverIdentity?.name) || !hasText(day.driverIdentity?.employeeNumber)))
+      || (locks.dayLocked && day.mentorNameDraft !== undefined)
+      || (day.driverIdentity !== undefined && (typeof day.driverIdentity?.name !== 'string'
+        || typeof day.driverIdentity.employeeNumber !== 'string'))
+      || (day.session !== undefined && (typeof day.session?.bus1 !== 'string'
+        || typeof day.session.bus2 !== 'string' || typeof day.session.routes !== 'string'
+        || typeof day.session.startTime !== 'string' || typeof day.session.endTime !== 'string'))) {
+      throw new AppError('storage_read')
+    }
+    ids.add(day.id)
+    previousDate = day.date
+  }
+}
+
+export function runDays(run: Run): Day[] {
+  return [run.firstDay, ...(run.laterDays ?? [])]
+}
+
+export function findDay(run: Run, dayId: string): Day | undefined {
+  return runDays(run).find(day => day.id === dayId)
 }
 
 export function createRun(command: CreateRunCommand, content: ContentSnapshot): Run {
@@ -156,6 +217,7 @@ export function createRun(command: CreateRunCommand, content: ContentSnapshot): 
       number: 1,
       date: fields.firstDate,
       driverId: fields.driverId,
+      driverIdentity: { name: fields.driverName.trim(), employeeNumber: fields.employeeNumber.trim() },
       mentorName: fields.mentorName.trim(),
       identityConfirmed: false,
     },

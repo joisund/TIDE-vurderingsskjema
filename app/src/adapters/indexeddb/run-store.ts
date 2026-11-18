@@ -1,6 +1,8 @@
 import type { RunStore, Selection, WorkspaceState } from '../../application/run-store.ts'
-import { AppError, isId, validateSavedRun } from '../../domain/run.ts'
+import { AppError, findDay, isId, validateSavedRun } from '../../domain/run.ts'
 import type { CreateRunCommand, Role, Run, RunReceipt } from '../../domain/run.ts'
+import { updateDayDraft } from '../../domain/day-draft.ts'
+import type { SaveDayDraftCommand } from '../../domain/day-draft.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
 export const SCHEMA_VERSION = 1
@@ -150,7 +152,7 @@ function workspace(operations: Operations<WorkspaceState>, session: SavedSession
   operations.all<SavedRun>(RUNS, records => {
     const runs = records.map(readRun)
     const selection = session.selection
-    if (selection && !runs.some(run => run.id === selection.runId && run.firstDay.id === selection.dayId)) {
+    if (selection && !runs.some(run => run.id === selection.runId && findDay(run, selection.dayId))) {
       throw new AppError('storage_read')
     }
     operations.finish({
@@ -209,9 +211,10 @@ export class IndexedDbRunStore implements RunStore {
     }
   }
 
-  read(): Promise<WorkspaceState> {
+  read(selection?: Selection): Promise<WorkspaceState> {
+    const displayed = selection && { ...selection }
     return this.#withDatabase([META, RUNS], 'readonly', operations => {
-      loadSession(operations, session => workspace(operations, session))
+      loadSession(operations, session => workspace(operations, { ...session, selection: displayed ?? session.selection }))
     })
   }
 
@@ -221,8 +224,8 @@ export class IndexedDbRunStore implements RunStore {
         operations.get<SavedRun>(RUNS, runId, record => {
           if (!record) throw new AppError('run_missing')
           const run = readRun(record)
-          if (run.id !== runId || (dayId !== undefined && run.firstDay.id !== dayId)) throw new AppError('storage_read')
-          const selected = { ...session, selection: { runId, dayId: run.firstDay.id } }
+          if (run.id !== runId || (dayId !== undefined && !findDay(run, dayId))) throw new AppError('storage_read')
+          const selected = { ...session, selection: { runId, dayId: dayId ?? run.firstDay.id } }
           operations.put(META, SESSION, envelope(selected))
           workspace(operations, selected)
         })
@@ -264,6 +267,31 @@ export class IndexedDbRunStore implements RunStore {
             operations.add(RUNS, run.id, envelope(run))
             operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
             operations.put(META, SESSION, envelope({ ...session, selection: { runId: run.id, dayId: run.firstDay.id } }))
+            operations.finish(receipt)
+          })
+        })
+      })
+    })
+  }
+
+  saveDayDraft(command: SaveDayDraftCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#withDatabase([META, RUNS, COMMANDS], 'readwrite', operations => {
+      operations.get<SavedReceipt>(COMMANDS, command.commandId, record => {
+        if (record) {
+          const previous = check(record)
+          if (previous.fingerprint !== fingerprint) throw new AppError('command_conflict')
+          operations.finish(previous.receipt)
+          return
+        }
+        loadSession(operations, session => {
+          const { actor, runId, payload } = command
+          if (actor.role !== session.role || actor.id !== session.actors[session.role]) throw new AppError('stale')
+          operations.get<SavedRun>(RUNS, runId, record => {
+            if (!record) throw new AppError('run_missing')
+            const run = updateDayDraft(readRun(record), command)
+            const receipt = { runId, dayId: payload.dayId, revision: run.revision }
+            operations.put(RUNS, runId, envelope(run))
+            operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
             operations.finish(receipt)
           })
         })

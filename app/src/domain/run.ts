@@ -1,3 +1,5 @@
+import type { Baseline, DriverAfterAnswer } from './baseline.ts'
+
 export type Role = 'fadder' | 'sjåfør'
 export type Actor = { id: string; role: Role }
 export type StartPlan = 1 | 2 | 3
@@ -37,7 +39,7 @@ export type Day = {
   session?: SessionFields
 }
 
-export type FirstDay = Day & { number: 1 }
+export type FirstDay = Day & { number: 1; driverAfterAnswers?: DriverAfterAnswer[] }
 
 export type Run = {
   id: string
@@ -47,6 +49,7 @@ export type Run = {
   initialLastDay: StartPlan
   firstDay: FirstDay
   laterDays?: (Day & { number: 2 | 3 | 4 | 5 })[]
+  baseline?: Baseline
   baselineConfirmation?: Confirmation
   content: ContentSnapshot
 }
@@ -84,13 +87,17 @@ export const criterionIds: readonly string[] = Object.freeze(
 )
 
 export function validateContent(content: ContentSnapshot): void {
+  if (!Array.isArray(content?.criteria) || !hasText(content.criteriaVersion)
+    || !hasText(content.ruleVersion) || !hasText(content.helpVersion)) {
+    throw new AppError('invalid_content')
+  }
   const expected = new Set(criterionIds)
   for (const criterion of content.criteria) {
-    if (!expected.delete(criterion.id) || !criterion.title.trim() || !criterion.help.trim()) {
+    if (!expected.delete(criterion?.id) || !hasText(criterion.title) || !hasText(criterion.help)) {
       throw new AppError('invalid_content')
     }
   }
-  if (expected.size || !content.criteriaVersion || !content.ruleVersion || !content.helpVersion) {
+  if (expected.size) {
     throw new AppError('invalid_content')
   }
 }
@@ -137,12 +144,15 @@ export function validateCreateIds(command: CreateRunCommand) {
   }
 }
 
-function isConfirmation(confirmation: Confirmation, role: Role) {
-  const time = confirmation?.confirmedAt
-  return isId(confirmation?.actor?.id) && confirmation.actor.role === role && hasText(confirmation.actor.name)
-    && typeof time === 'string' && isCalendarDate(time.slice(0, 10))
+export function isConfirmationTime(time: unknown): time is string {
+  return typeof time === 'string' && isCalendarDate(time.slice(0, 10))
     && /^T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?Z$/.test(time.slice(10))
     && time.endsWith('Z')
+}
+
+function isConfirmation(confirmation: Confirmation, role: Role) {
+  return isId(confirmation?.actor?.id) && confirmation.actor.role === role && hasText(confirmation.actor.name)
+    && isConfirmationTime(confirmation.confirmedAt)
 }
 
 export function dayLocks(run: Run, day: Day) {

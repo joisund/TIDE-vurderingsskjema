@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import { dayFields } from '../domain/day-draft.ts'
 import type { DayChanges, DayDraft, DayDraftErrors, DayField, SaveDayDraftCommand } from '../domain/day-draft.ts'
 import { AppError } from '../domain/run.ts'
 import type { Actor } from '../domain/run.ts'
 
-const quietPeriod = 350
-const maxWait = 1500
+import { useAutosaveDeadline } from './use-autosave-deadline.ts'
 
 type StoredDay = WorkspaceView & { selected: DayView }
 type Conflict = { stored?: StoredDay; readError?: unknown; edited: DayField[] }
@@ -34,18 +33,11 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
   const [draft, setDraft] = useState<Draft>(() => ({ saved: initial, fields: initial.fields, writing: false }))
   const current = useRef(draft)
   const [reviewing, setReviewing] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const frame = useRef<number>(undefined)
-  const dirtyAt = useRef<number>(undefined)
+  const deadline = useAutosaveDeadline()
   const active = useRef<Promise<boolean>>(undefined)
   const attempt = useRef<{ signature: string; command: SaveDayDraftCommand }>(undefined)
   const editVersions = useRef<Partial<Record<DayField, number>>>({})
   const selection = { runId: initial.id, dayId: initial.dayId }
-
-  useEffect(() => () => {
-    clearTimeout(timer.current)
-    if (frame.current !== undefined) cancelAnimationFrame(frame.current)
-  }, [])
 
   function publish(next: Draft) {
     current.current = next
@@ -70,24 +62,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
   }
 
   function schedule() {
-    cancelScheduledWrite()
-    const now = performance.now()
-    dirtyAt.current ??= now
-    const delay = Math.min(quietPeriod, Math.max(0, maxWait - (now - dirtyAt.current)))
-    timer.current = setTimeout(() => { void flush(false) }, delay)
-
-    // Synlige faner kan få forsinkede tidsur etter inaktivitet. Sjekk samme frist ved neste aktive skjermoppdatering.
-    const due = now + delay
-    function checkDeadline(timestamp: number) {
-      if (timestamp >= due) void flush(false)
-      else frame.current = requestAnimationFrame(checkDeadline)
-    }
-    frame.current = requestAnimationFrame(checkDeadline)
-  }
-
-  function cancelScheduledWrite() {
-    clearTimeout(timer.current)
-    if (frame.current !== undefined) cancelAnimationFrame(frame.current)
+    deadline.schedule(() => { void flush(false) })
   }
 
   function update(field: DayField, value: string) {
@@ -114,7 +89,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
     }
     const { command } = attempt.current
     const versions = { ...editVersions.current }
-    dirtyAt.current = undefined
+    deadline.reset()
     publish({ ...current.current, writing: true })
     try {
       const receipt = await application.withOpenStorage(() => application.executeDayDraft(command))
@@ -130,7 +105,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
       publish({ saved, fields, writing: false })
       onSaved(saved)
       if (Object.keys(changesSince(fields, savedFields)).length > 0) schedule()
-      else dirtyAt.current = undefined
+      else deadline.reset()
       return true
     } catch (failure) {
       report(failure)
@@ -168,7 +143,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
   }
 
   async function flush(drain = true) {
-    cancelScheduledWrite()
+    deadline.cancel()
     if (!drain && active.current) return true
     while (true) {
       if (active.current) {
@@ -179,7 +154,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
       if (problem) return false
       const changes = changesSince(fields, saved.fields)
       if (Object.keys(changes).length === 0) {
-        dirtyAt.current = undefined
+        deadline.reset()
         return true
       }
       const written = await startWrite(saved, changes)
@@ -204,7 +179,7 @@ export function useDayDraft({ initial, actor, application, report, onSaved, onAd
     const stored = current.current.problem?.conflict?.stored
     if (!stored || active.current) return
     attempt.current = undefined
-    dirtyAt.current = undefined
+    deadline.reset()
     publish({ saved: stored.selected, fields: stored.selected.fields, writing: false })
     onAdopt(stored)
   }

@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
+import type { DayField } from '../domain/day-draft.ts'
 import { AppError, validateCreateRun } from '../domain/run.ts'
 import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
 import { CreateRunForm } from './CreateRunForm.tsx'
 import { CalendarDate } from './CalendarDate.tsx'
+import { BaselineForm } from './BaselineForm.tsx'
 import { DayDraftForm } from './DayDraftForm.tsx'
 import type { DayDraftHandle } from './DayDraftForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 
-type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day'
+type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day' | 'baseline'
 type Props = {
   application: RunApplication
   logo: string
@@ -28,6 +30,7 @@ const headings: Record<Screen, string> = {
   runs: 'Løpsoversikt',
   create: 'Opprett løp',
   day: 'Dagsoversikt',
+  baseline: 'Førvurdering',
 }
 
 export function App({ application, logo, prepare, requestPersistence, report }: Props) {
@@ -43,7 +46,9 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const [storageStatus, setStorageStatus] = useState('')
   const [navigationError, setNavigationError] = useState('')
   const [online, setOnline] = useState(() => navigator.onLine)
-  const dayDraft = useRef<DayDraftHandle>(null)
+  const editor = useRef<DayDraftHandle>(null)
+  const [fieldToFix, setFieldToFix] = useState<DayField>()
+  const focusDayField = useRef<DayField>(undefined)
   const roleSelect = useRef<HTMLSelectElement>(null)
   const inFlight = useRef(false)
   const attempt = useRef<{ fields: CreateRunFields; command: CreateRunCommand }>(undefined)
@@ -51,7 +56,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const focusHeading = useRef(false)
   const persistenceRequested = useRef(false)
   const initialization = useRef<Promise<WorkspaceView>>(undefined)
-  const selected = screen === 'day' ? view?.selected : undefined
+  const selected = screen === 'day' || screen === 'baseline' ? view?.selected : undefined
 
   const accept = useCallback((data: WorkspaceView) => {
     setView(data)
@@ -83,7 +88,15 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     // Oppstarten utføres én gang per visning. Nytt forsøk går gjennom retryOpen.
   }, [accept, fail, prepare])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (screen === 'day' && focusDayField.current) {
+      const target = document.getElementById(`day-field-${focusDayField.current}`)
+      focusDayField.current = undefined
+      if (target) {
+        focusHeading.current = false
+        target.focus()
+      }
+    }
     if (focusHeading.current) {
       focusHeading.current = false
       heading.current?.focus()
@@ -102,6 +115,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
 
   function navigate(next: Screen) {
     focusHeading.current = true
+    if (next !== 'day') setFieldToFix(undefined)
     setScreen(next)
   }
 
@@ -157,7 +171,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
 
   function showRuns() {
     void perform(async () => {
-      if (dayDraft.current && !await dayDraft.current.flush()) return
+      if (editor.current && !await editor.current.flush()) return
       try {
         setView(await application.withOpenStorage(() => application.read()))
         setStorageStatus('')
@@ -176,7 +190,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
 
   function openRun(id: string) {
     void perform(async () => {
-      if (dayDraft.current && !await dayDraft.current.flush()) return
+      if (editor.current && !await editor.current.flush()) return
       try {
         setView(await application.withOpenStorage(() => application.select(id)))
         setStorageStatus('')
@@ -188,10 +202,31 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
+  function showAssessmentScreen(next: 'day' | 'baseline', field?: DayField) {
+    if (!selected) return
+    void perform(async () => {
+      if (editor.current && !await editor.current.flush()) return
+      try {
+        const dayId = field ? selected.baseline.firstDayId : selected.dayId
+        const latest = await application.withOpenStorage(() => field
+          ? application.select(selected.id, dayId)
+          : application.read({ runId: selected.id, dayId }))
+        if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
+        else setView(latest)
+        focusDayField.current = field
+        setFieldToFix(field)
+        navigate(next)
+      } catch (error) {
+        report(error)
+        setNavigationError(explain(error))
+      }
+    })
+  }
+
   function changeRole(role: Role) {
     if (view?.actor.role === role) return
     void perform(async () => {
-      if (dayDraft.current && !await dayDraft.current.flush()) return
+      if (editor.current && !await editor.current.flush()) return
       try {
         const next = await application.withOpenStorage(() =>
           application.changeRole(role, selected && { runId: selected.id, dayId: selected.dayId }),
@@ -216,7 +251,11 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       attempt.current = undefined
     })
     flushSync(() => { setView(next) })
-    if (returnFocus) roleSelect.current?.focus()
+    const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === 'fadder'
+      ? document.getElementById(`day-field-${fieldToFix}`)
+      : null
+    if (fieldTarget) fieldTarget.focus()
+    else if (returnFocus) roleSelect.current?.focus()
   }
 
   function acceptDaySave(saved: DayView) {
@@ -331,14 +370,17 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                     </>}
               </div>
             )}
-            {selected && <p className="day-context">{selected.fields.driverName || 'Sjåførnavn mangler'} · Dag {selected.day}</p>}
+            {selected && <p className="day-context">
+              {(screen === 'baseline' ? selected.baseline.fields.driverName : selected.fields.driverName) || 'Sjåførnavn mangler'}
+              {' · Dag '}{screen === 'baseline' ? 1 : selected.day}
+            </p>}
             {view && <p className="network-status" aria-live="polite">{online ? 'Nett tilkoblet' : 'Uten nett'}</p>}
           </div>
         </div>
       </header>
       <main className="content">
         <h1 ref={heading} tabIndex={-1}>{headings[screen]}</h1>
-        {screen !== 'day' && <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>}
+        {screen === 'create' && <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>}
         {navigationError && <p className="error-panel" role="alert">{navigationError}</p>}
         {screen === 'loading' && <p role="status">Åpner lokalt lager og laster løp …</p>}
         {screen === 'unavailable' && (
@@ -381,7 +423,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
               onChange={updateField} onSubmit={submit} onCancel={showRuns} onRefresh={refreshDraft} />
           </>
         )}
-        {selected && view && (
+        {screen === 'day' && selected && view && (
           <>
             <p className="run-status">{selected.status}</p>
             <dl className="details">
@@ -391,11 +433,29 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                 <dd>{selected.plannedLastDate ? <CalendarDate value={selected.plannedLastDate} /> : 'Dato ikke registrert'}</dd>
               </div>
             </dl>
-            <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={dayDraft}
+            <section className="baseline-entry" aria-labelledby="baseline-entry-heading">
+              <h2 id="baseline-entry-heading">Førvurdering for løpet</h2>
+              <p>{selected.baseline.confirmation ? 'Førvurderingen er låst' : 'Førvurderingen er ikke bekreftet'}</p>
+              <button type="button" className="button secondary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('baseline')}>Åpne førvurderingen</button>
+            </section>
+            <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
               initial={selected} actor={view.actor} application={application} report={report}
-              onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} />
+              onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} fieldToFix={fieldToFix} />
             <div className="actions">
               <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
+            </div>
+          </>
+        )}
+        {screen === 'baseline' && selected && view && (
+          <>
+            <BaselineForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
+              initial={selected} actor={view.actor} application={application} report={report}
+              onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy}
+              onConfirmIssue={setNavigationError} onDayField={field => showAssessmentScreen('day', field)} />
+            <div className="actions">
+              <button type="button" className="button secondary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>
             </div>
           </>
         )}

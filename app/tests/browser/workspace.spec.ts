@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test'
 import { mkdtempDisposableSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { lockedRun, readSavedRun, writeSavedRun } from './saved-run-fixture.ts'
 
 const origin = 'http://127.0.0.1:4173'
 const input = { name: 'Nora Eksempel', employee: 'DEMO-101', mentor: 'Emil Eksempel', date: '2027-03-28' }
@@ -811,34 +812,7 @@ test('delvis låst konflikt lar brukeren beholde redigerbare endringer og har gj
   await openForm(page)
   await fillForm(page)
   await save(page)
-  await page.evaluate(async () => {
-    const request = indexedDB.open('tide-kjorevurdering')
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(request.error)
-    })
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('runs', 'readwrite')
-        const store = tx.objectStore('runs')
-        const cursor = store.openCursor()
-        cursor.onsuccess = () => {
-          const record = cursor.result!
-          const envelope = record.value
-          envelope.data.revision++
-          envelope.data.baselineConfirmation = {
-            actor: { role: 'sjåfør', name: 'Nora Eksempel', id: crypto.randomUUID() },
-            confirmedAt: '2027-03-28T07:00:00Z',
-          }
-          record.update(envelope)
-        }
-        tx.oncomplete = () => resolve()
-        tx.onabort = () => reject(tx.error)
-      })
-    } finally {
-      db.close()
-    }
-  })
+  await writeSavedRun(page, lockedRun(await readSavedRun(page)))
   await page.getByLabel('Dato', { exact: true }).fill('2027-03-29')
   const bus = page.getByLabel('Buss 1')
   await bus.fill('81')

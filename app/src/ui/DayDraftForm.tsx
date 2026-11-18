@@ -20,6 +20,7 @@ type Props = {
   onSaved: (day: DayView) => void
   onAdopt: (view: WorkspaceView) => void
   navigating: boolean
+  fieldToFix?: DayField
 }
 
 const labels: Record<DayField, string> = {
@@ -42,7 +43,7 @@ function fieldHint(field: DayField) {
   return 'Kreves ved sjåførbekreftelse og dagslåsing.'
 }
 
-export function DayDraftForm({ ref, navigating, ...options }: Props) {
+export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props) {
   const editor = useDayDraft(options)
   const { draft, access, conflict, staleRole, conflictingLocks, editableConflictChanges, reviewing } = editor
   const [checking, setChecking] = useState(false)
@@ -148,6 +149,7 @@ export function DayDraftForm({ ref, navigating, ...options }: Props) {
           const value = draft.fields[field]
           const editable = access[field] === 'editable'
           const issue = editor.validation[field]
+            ?? (field === fieldToFix ? driverIssues[field] : undefined)
             ?? (checking || (value && (field === 'startTime' || field === 'endTime')) ? issues[field] : undefined)
           const hint = fieldHint(field)
           const description = `${id}-hint${issue ? ` ${id}-error` : ''}`

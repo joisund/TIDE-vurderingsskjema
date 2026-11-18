@@ -3,6 +3,8 @@ import { AppError, findDay, isId, validateSavedRun } from '../../domain/run.ts'
 import type { CreateRunCommand, Role, Run, RunReceipt } from '../../domain/run.ts'
 import { updateDayDraft } from '../../domain/day-draft.ts'
 import type { SaveDayDraftCommand } from '../../domain/day-draft.ts'
+import { confirmBaseline, updateBaselineDraft, validateSavedBaseline } from '../../domain/baseline.ts'
+import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../../domain/baseline.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
 export const SCHEMA_VERSION = 1
@@ -35,6 +37,7 @@ function readRun(record: SavedRun) {
   if (!record) throw new AppError('storage_read')
   const run = check(record)
   validateSavedRun(run)
+  validateSavedBaseline(run)
   return run
 }
 
@@ -275,6 +278,28 @@ export class IndexedDbRunStore implements RunStore {
   }
 
   saveDayDraft(command: SaveDayDraftCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: updateDayDraft(run, command), dayId: command.payload.dayId,
+    }))
+  }
+
+  saveBaselineDraft(command: SaveBaselineDraftCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: updateBaselineDraft(run, command), dayId: run.firstDay.id,
+    }))
+  }
+
+  confirmBaseline(command: ConfirmBaselineCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: confirmBaseline(run, command), dayId: run.firstDay.id,
+    }))
+  }
+
+  #mutateRun(
+    command: Pick<SaveDayDraftCommand, 'commandId' | 'runId' | 'actor'>,
+    fingerprint: string,
+    update: (run: Run) => { run: Run; dayId: string },
+  ): Promise<RunReceipt> {
     return this.#withDatabase([META, RUNS, COMMANDS], 'readwrite', operations => {
       operations.get<SavedReceipt>(COMMANDS, command.commandId, record => {
         if (record) {
@@ -284,12 +309,12 @@ export class IndexedDbRunStore implements RunStore {
           return
         }
         loadSession(operations, session => {
-          const { actor, runId, payload } = command
+          const { actor, runId } = command
           if (actor.role !== session.role || actor.id !== session.actors[session.role]) throw new AppError('stale')
           operations.get<SavedRun>(RUNS, runId, record => {
             if (!record) throw new AppError('run_missing')
-            const run = updateDayDraft(readRun(record), command)
-            const receipt = { runId, dayId: payload.dayId, revision: run.revision }
+            const { run, dayId } = update(readRun(record))
+            const receipt = { runId, dayId, revision: run.revision }
             operations.put(RUNS, runId, envelope(run))
             operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
             operations.finish(receipt)

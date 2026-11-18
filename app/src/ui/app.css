@@ -442,6 +442,21 @@ button.matrix-choice { cursor: pointer; }
 .technical-training .assessment-dialog form { margin-top: 12px; }
 .technical-training button { overflow-wrap: anywhere; }
 
+.line-training { display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.line-training h2, .line-training h3 { margin-block: 4px 8px; }
+.line-training p { margin-block: 3px; }
+.line-reference { font-size: .875rem; }
+.line-rows, .line-dates { list-style: none; padding: 0; margin-block: 8px; }
+.line-row { border-block-start: 1px solid var(--tide-sand); padding-block: 10px; }
+.line-row .run-status { margin-bottom: 8px; }
+.line-row .form-fields { margin-block: 8px; }
+.line-row .form-fields button { justify-self: start; }
+.line-dates > li + li { margin-top: 9px; }
+.line-conflict { white-space: pre-wrap; }
+.line-training .actions { align-items: center; }
+.line-training .error-panel a { display: inline-flex; align-items: center; min-height: 44px; }
+.line-training button { overflow-wrap: anywhere; }
+
 @media print {
   .matrix-headings { position: static; }
   .help-trigger, .assessment-dialog, .baseline-confirm, .baseline-missing { display: none; }

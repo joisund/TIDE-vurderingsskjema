@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
-import type { DownloadRunPdf, DownloadTechnicalPdf } from '../application/run-pdf.ts'
+import type { DownloadLinePdf, DownloadRunPdf, DownloadTechnicalPdf } from '../application/run-pdf.ts'
+import type { DocumentSelection } from '../application/run-store.ts'
 import type { DayField } from '../domain/day-draft.ts'
 import type { ClosureIssue } from '../domain/closure.ts'
 import { availableExtraDays } from '../domain/follow-up.ts'
@@ -24,15 +25,20 @@ import { CreateDriverForm, InstructorOverview } from './InstructorOverview.tsx'
 import { CreateTechnicalForm, TechnicalTrainingForm } from './TechnicalTraining.tsx'
 import type { TechnicalEditorHandle } from './TechnicalTraining.tsx'
 import type { TechnicalSelection } from '../domain/technical-training.ts'
+import { lineDocumentType } from '../domain/line-training.ts'
+import type { CreateLineTraining } from '../domain/line-training.ts'
+import { LineTrainingForm } from './LineTraining.tsx'
+import type { LineEditorHandle } from './LineTraining.tsx'
 
 type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend' | 'closure'
 type Screen = 'loading' | 'unavailable' | 'runs' | 'drivers' | 'create-driver' | 'create' | 'context-required'
-  | 'create-technical' | 'technical' | DayScreen
+  | 'create-technical' | 'technical' | 'line-training' | DayScreen
 type RoleRestore = 'checking' | 'read-error' | 'local-draft'
 type Props = {
   application: RunApplication
   downloadRunPdf: DownloadRunPdf
   downloadTechnicalPdf: DownloadTechnicalPdf
+  downloadLinePdf: DownloadLinePdf
   logo: string
   prepare: () => Promise<WorkspaceView>
   requestPersistence: () => Promise<boolean>
@@ -51,6 +57,7 @@ const headings: Record<Screen, string> = {
   'create-driver': 'Opprett sjåfør',
   'create-technical': 'Ny teknisk opplæring',
   technical: 'Teknisk opplæring',
+  'line-training': 'Linjeopplæring',
   'context-required': 'Velg rolle for vurderingen',
   create: 'Opprett løp',
   day: 'Dagsoversikt',
@@ -70,10 +77,11 @@ function overviewScreen(view: WorkspaceView) {
 function initialScreen(view: WorkspaceView) {
   if (view.blocked) return 'context-required'
   if (view.technical || view.technicalProblem) return 'technical'
+  if (view.lineTraining || view.lineProblem) return 'line-training'
   return view.selected ? 'day' : overviewScreen(view)
 }
 
-export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, prepare, requestPersistence, report }: Props) {
+export function App({ application, downloadRunPdf, downloadTechnicalPdf, downloadLinePdf, logo, prepare, requestPersistence, report }: Props) {
   const [screen, setScreen] = useState<Screen>('loading')
   const [view, setView] = useState<WorkspaceView>()
   const [startupIssue, setStartupIssue] = useState('')
@@ -94,9 +102,12 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
   const [dayEditorGeneration, setDayEditorGeneration] = useState(0)
   const [closureEditorGeneration, setClosureEditorGeneration] = useState(0)
   const [technicalEditorGeneration, setTechnicalEditorGeneration] = useState(0)
+  const [documentStatus, setDocumentStatus] = useState('')
   const [online, setOnline] = useState(() => navigator.onLine)
   const editor = useRef<MentorAssessmentHandle>(null)
   const technicalEditor = useRef<TechnicalEditorHandle>(null)
+  const lineEditor = useRef<LineEditorHandle>(null)
+  const lineAttempt = useRef<CreateLineTraining>(undefined)
   const [fieldToFix, setFieldToFix] = useState<DayField>()
   const focusDayField = useRef<DayField>(undefined)
   const roleSelect = useRef<HTMLSelectElement>(null)
@@ -109,17 +120,21 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
   const driverAttempt = useRef<{ fields: DriverFields; command: CreateDriverCommand }>(undefined)
   const heading = useRef<HTMLHeadingElement>(null)
   const focusHeading = useRef(false)
+  const focusAfterRole = useRef<string>(undefined)
   const persistenceRequested = useRef(false)
   const initialization = useRef<Promise<WorkspaceView>>(undefined)
   const retryDrivers = useRef(false)
   const overview = screen === 'runs' || screen === 'drivers'
-  const showingTechnical = screen === 'technical' || screen === 'create-technical'
-  const showingDay = !showingTechnical && !overview
+  const showingDocument = screen === 'technical' || screen === 'create-technical' || screen === 'line-training'
+  const showingDay = !showingDocument && !overview
     && !['loading', 'unavailable', 'create', 'create-driver', 'context-required'].includes(screen)
   const selected = showingDay ? view?.selected : undefined
   const technical = screen === 'technical' ? view?.technical : undefined
   const technicalProblem = screen === 'technical' ? view?.technicalProblem : undefined
-  const technicalAddress = technical ?? technicalProblem
+  const lineTraining = screen === 'line-training' ? view?.lineTraining : undefined
+  const lineProblem = screen === 'line-training' ? view?.lineProblem : undefined
+  const address = technical ?? technicalProblem ?? lineTraining ?? lineProblem
+  const documentEditor = screen === 'line-training' ? lineEditor : technicalEditor
   const technicalDriver = view?.technicalDrivers.find(driver => driver.id === view.technicalDriverId)
   const blockedRun = screen === 'context-required' ? view?.blocked : undefined
   const professional = professionalTerms(selected?.context ?? blockedRun?.context ?? 'fadder')
@@ -127,8 +142,8 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
   const instructorCreation = screen === 'create-driver' || (screen === 'create' && Boolean(runDriver))
   const dayCommandForm = screen === 'create-day' || screen === 'extend'
   const draftRole = dayCommandForm ? (selected?.context ?? 'fadder') : (view?.actor.role ?? 'fadder')
-  const guardedScreen = showingDay || overview || showingTechnical || instructorCreation || screen === 'context-required'
-  const instructorProtected = guardedScreen && (showingTechnical || screen === 'drivers' || view?.actor.role === 'instruktør'
+  const guardedScreen = showingDay || overview || showingDocument || instructorCreation || screen === 'context-required'
+  const instructorProtected = guardedScreen && (showingDocument || screen === 'drivers' || view?.actor.role === 'instruktør'
     || selected?.context === 'instruktør' || blockedRun?.context === 'instruktør')
 
   const accept = useCallback((data: WorkspaceView) => {
@@ -174,7 +189,14 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
       focusHeading.current = false
       heading.current?.focus()
     }
-  }, [screen, selected?.dayId, closureEditorGeneration, technicalAddress?.documentId, technicalEditorGeneration])
+  }, [screen, selected?.dayId, closureEditorGeneration, address?.documentId, technicalEditorGeneration])
+
+  useLayoutEffect(() => {
+    if (busy || !focusAfterRole.current) return
+    const target = document.getElementById(focusAfterRole.current) ?? heading.current
+    focusAfterRole.current = undefined
+    target?.focus()
+  }, [busy])
 
   useEffect(() => {
     const updateNetwork = () => setOnline(navigator.onLine)
@@ -276,7 +298,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
   function showDocumentOverview() {
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
-      if (technicalEditor.current && !await technicalEditor.current.flush()) return
+      if (documentEditor.current && !await documentEditor.current.flush()) return
       try {
         const latest = await application.withOpenStorage(() => application.showDrivers())
         if (latest.actor.id !== view?.actor.id) replaceRoleView(latest)
@@ -313,6 +335,59 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
         setNavigationError(explain(error))
       }
     })
+  }
+
+  function selectDocument(selection: DocumentSelection) {
+    return selection.documentType === lineDocumentType ? application.selectLineTraining(selection) : application.selectTechnical(selection)
+  }
+
+  async function loadLine(selection: DocumentSelection) {
+    const latest = await application.withOpenStorage(() => selectDocument(selection))
+    adoptLineState(latest)
+  }
+
+  function openLine(selection: DocumentSelection) {
+    void perform(async () => {
+      if (documentEditor.current && !await documentEditor.current.flush()) return
+      setDocumentStatus('Laster linjeopplæringen …')
+      try {
+        await loadLine(selection)
+      } catch (error) {
+        report(error)
+        setNavigationError('Linjeopplæringen kunne ikke åpnes. ' + explain(error))
+      } finally {
+        setDocumentStatus('')
+      }
+    })
+  }
+
+  function newLine() {
+    if (inFlight.current || !technicalDriver || !view || view.actor.role === 'fadder') return
+    const { actor } = view
+    if (lineAttempt.current?.actor.id !== actor.id || lineAttempt.current?.driverRef !== technicalDriver.id) {
+      lineAttempt.current = application.newCreateLineCommand(actor, technicalDriver.id)
+    }
+    const command = lineAttempt.current
+    void perform(async () => {
+      setDocumentStatus('Oppretter linjeoversikten …')
+      try {
+        const receipt = await application.withOpenStorage(() => application.executeLineTraining(command))
+        await loadLine(receipt)
+        lineAttempt.current = undefined
+      } catch (error) {
+        report(error)
+        setNavigationError('Linjeoversikten kunne ikke opprettes eller åpnes. ' + explain(error))
+      } finally {
+        setDocumentStatus('')
+      }
+    })
+  }
+
+  function adoptLineState(latest: WorkspaceView) {
+    if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
+    else setView(latest)
+    const next = initialScreen(latest)
+    navigate(next === 'runs' && latest.actor.role === 'sjåfør' ? 'drivers' : next)
   }
 
   function adoptTechnicalState(latest: WorkspaceView) {
@@ -475,17 +550,23 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
     })
   }
 
-  function changeRole(role: Role) {
+  function changeRole(role: Role, focusTarget?: string) {
     if (view?.actor.role === role) return
+    const expectedLine = focusTarget && view && lineTraining && {
+      actor: view.actor, driverRef: lineTraining.driverRef,
+      document: { documentId: lineTraining.documentId, documentType: lineTraining.documentType },
+    }
+    if (focusTarget && !expectedLine) return
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
-      if (technicalEditor.current && !await technicalEditor.current.flush()) return
+      if (documentEditor.current && !await documentEditor.current.flush()) return
       try {
         const current = selected ?? blockedRun
         const selection = overview && role === 'instruktør' && screen !== 'drivers' ? null
           : current && { runId: current.id, dayId: current.dayId }
-        const next = await application.withOpenStorage(() => application.changeRole(role, selection))
+        const next = await application.withOpenStorage(() => application.changeRole(role, selection, expectedLine || undefined))
         replaceRoleView(next)
+        if (focusTarget) focusAfterRole.current = focusTarget
       } catch (error) {
         report(error)
         setNavigationError('Rollebyttet kunne ikke fullføres. ' + explain(error))
@@ -504,7 +585,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
       setStorageStatus('')
       attempt.current = undefined
       clearRoleRestore()
-      if (showingTechnical) setScreen(initialScreen(next))
+      if (showingDocument) setScreen(initialScreen(next))
       else if (screen === 'drivers' && next.actor.role !== 'fadder') setScreen('drivers')
       else if (overview) setScreen(overviewScreen(next))
       else if (next.blocked) setScreen('context-required')
@@ -561,22 +642,25 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
     const current = selected ?? blockedRun
     const selection = recoverySelection.current ?? (current && { runId: current.id, dayId: current.dayId })
     try {
-      if (showingTechnical) {
+      if (showingDocument) {
         let next = await application.withOpenStorage(() => resume
           ? application.changeRole(draftRole)
           : application.read())
         if (resume && technicalDriver && next.technicalDriverId !== technicalDriver.id) {
           next = await application.selectDriver(technicalDriver.id)
         }
-        if (resume && technicalAddress && (next.technical ?? next.technicalProblem)?.documentId !== technicalAddress.documentId) {
-          next = await application.selectTechnical(technicalAddress)
+        const nextAddress = (view: WorkspaceView) => view.technical ?? view.technicalProblem ?? view.lineTraining ?? view.lineProblem
+        const sameDocument = (view: WorkspaceView) => nextAddress(view)?.documentId === address?.documentId
+          && nextAddress(view)?.documentType === address?.documentType
+        if (resume && address && !sameDocument(next)) {
+          next = await selectDocument(address)
         }
         const sameContext = next.actor.id === view.actor.id && next.actor.role === view.actor.role
           && next.technicalDriverId === view.technicalDriverId
-          && (screen === 'create-technical' || (next.technical ?? next.technicalProblem)?.documentId === technicalAddress?.documentId)
+          && (screen === 'create-technical' || sameDocument(next))
         if (!sameContext) {
-          technicalEditor.current?.clearDialogs()
-          if (screen === 'create-technical' || technicalEditor.current?.hasLocalChanges()) {
+          documentEditor.current?.clearDialogs()
+          if (screen === 'create-technical' || documentEditor.current?.hasLocalChanges()) {
             setRoleRestore('local-draft')
             return
           }
@@ -585,6 +669,12 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
           return
         }
         if (next.technical) technicalEditor.current?.restore(next.technical)
+        if (next.lineProblem && lineEditor.current?.hasLocalChanges()) {
+          lineEditor.current.restoreReadError(new AppError(next.lineProblem.error))
+          clearRoleRestore()
+          return
+        }
+        if (next.lineTraining) lineEditor.current?.restore(next.lineTraining)
         flushSync(() => {
           setView(next)
           setRoleRestore(undefined)
@@ -829,7 +919,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
                 <p className="professional-context">{professional.role}{dayName && ` · ${dayName}`}</p>
               </>
             )}
-            {showingTechnical && technicalDriver && !roleRestore && (
+            {showingDocument && technicalDriver && !roleRestore && (
               <p className="day-context">Valgt sjåfør · {technicalDriver.name} · {technicalDriver.employeeNumber}</p>
             )}
             {view && <p className="network-status" aria-live="polite">{online ? 'Nett tilkoblet' : 'Uten nett'}</p>}
@@ -842,6 +932,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
           <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>
         )}
         {navigationError && <p className="error-panel" role="alert">{navigationError}</p>}
+        {documentStatus && <p className="save-status" role="status">{documentStatus}</p>}
         {screen === 'loading' && <p role="status">Åpner lokalt lager og laster løp …</p>}
         {screen === 'unavailable' && (
           <section aria-label="Lagringsfeil">
@@ -873,7 +964,8 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
         {screen === 'drivers' && view && view.actor.role !== 'fadder' && !roleRestore && (
           <>
             <InstructorOverview view={view} busy={busy} selectingDriver={selectingDriver} onNewDriver={newDriver}
-              onSelect={selectDriver} onNewRun={newRun} onOpenRun={openRun} onNewTechnical={newTechnical} onOpenTechnical={openTechnical} />
+              onSelect={selectDriver} onNewRun={newRun} onOpenRun={openRun} onNewTechnical={newTechnical} onOpenTechnical={openTechnical}
+              onNewLine={newLine} onOpenLine={openLine} />
             {view.actor.role === 'sjåfør' && <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>
               Til løpsoversikten
             </button>}
@@ -908,6 +1000,22 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, logo, p
             </div>
           </section>
         )}
+        {lineTraining && view && <div hidden={Boolean(roleRestore)}>
+          <LineTrainingForm key={`${view.actor.id}/${lineTraining.documentId}`} ref={lineEditor} initial={lineTraining}
+            actor={view.actor} application={application} navigating={busy} suspended={Boolean(roleRestore)}
+            download={downloadLinePdf} report={report} onStored={adoptLineState} onDriverRole={target => changeRole('sjåfør', target)} />
+          <div className="actions"><button type="button" className="button secondary" aria-disabled={busy}
+            onClick={showDocumentOverview}>Til dokumentoversikten</button></div>
+        </div>}
+        {lineProblem && !roleRestore && <section aria-label="Leseproblem i linjeopplæring">
+          <p className="error-panel" role="alert">Linjeoversikten kunne ikke leses. {
+            lineProblem.error === 'storage_read' ? 'Dokumentgrunnlaget er ugyldig.' : explain(new AppError(lineProblem.error))
+          }</p>
+          <div className="actions">
+            <button type="button" className="button primary" aria-disabled={busy} onClick={() => openLine(lineProblem)}>Prøv igjen</button>
+            <button type="button" className="button secondary" aria-disabled={busy} onClick={showDocumentOverview}>Til dokumentoversikten</button>
+          </div>
+        </section>}
         {screen === 'create-driver' && view?.actor.role === 'instruktør' && !roleRestore && (
           <CreateDriverForm view={view} fields={driverFields} errors={driverErrors} busy={busy}
             problem={problemText} saved={Boolean(savedDriverId)} onSubmit={submitDriver} onSelect={selectDriver}

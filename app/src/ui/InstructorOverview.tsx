@@ -3,6 +3,7 @@ import type { WorkspaceView } from '../application/run-application.ts'
 import { professionalTerms } from '../domain/run.ts'
 import type { DriverFields, DriverReference, FieldErrors } from '../domain/run.ts'
 import type { TechnicalSelection } from '../domain/technical-training.ts'
+import type { LineSelection } from '../domain/line-training.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 
 function DriverButton({ driver, runs, selected, busy, onSelect }: {
@@ -24,7 +25,8 @@ function DriverButton({ driver, runs, selected, busy, onSelect }: {
   )
 }
 
-export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, onSelect, onNewRun, onOpenRun, onNewTechnical, onOpenTechnical }: {
+export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, onSelect, onNewRun, onOpenRun,
+  onNewTechnical, onOpenTechnical, onNewLine, onOpenLine }: {
   view: WorkspaceView
   busy: boolean
   selectingDriver: boolean
@@ -34,6 +36,8 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
   onOpenRun: (runId: string) => void
   onNewTechnical: () => void
   onOpenTechnical: (document: TechnicalSelection) => void
+  onNewLine: () => void
+  onOpenLine: (document: LineSelection) => void
 }) {
   const [query, setQuery] = useState('')
   const search = query.trim().toLocaleLowerCase('nb-NO')
@@ -48,6 +52,7 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
     if ('error' in a) return 'error' in b ? a.documentId.localeCompare(b.documentId) : 1
     return 'error' in b ? -1 : b.trainingDate.localeCompare(a.trainingDate)
   })
+  const line = view.lineDocuments
   return (
     <>
       {instructor && <button type="button" className="button primary" aria-disabled={busy} onClick={onNewDriver}>Opprett sjåfør</button>}
@@ -76,10 +81,11 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
           <p>Ansattnummer {selected.employeeNumber} · Registrering {selected.id}</p>
           <div className="actions">
             <button type="button" className="button primary" aria-disabled={busy} onClick={onNewTechnical}>Ny teknisk opplæring</button>
+            <button type="button" className="button primary" aria-disabled={busy} onClick={onNewLine}>Ny linjeopplæring</button>
             {instructor && <button type="button" className="button primary" aria-disabled={busy}
               onClick={() => onNewRun(selected)}>Ny instruktørvurdering</button>}
           </div>
-          {(documents.length > 0 || technical.length > 0) ? <ul className="run-list">
+          {(documents.length > 0 || technical.length > 0 || line.length > 0) ? <ul className="run-list">
             {technical.map(document => (
               <li key={document.documentId}>
                 <button type="button" className="run-button" aria-disabled={busy} onClick={() => onOpenTechnical(document)}>
@@ -96,6 +102,16 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
                 </button>
               </li>
             ))}
+            {line.map(document => <li key={document.documentId}>
+              <button type="button" className="run-button" aria-disabled={busy} onClick={() => onOpenLine(document)}>
+                <span className="run-name">Åpne linjeopplæring</span>
+                {'error' in document ? <span>Dokumentet kan ikke leses</span> : <>
+                  <span>{document.driverName} · Ansattnummer {document.employeeNumber}</span>
+                  <span className="run-status">{document.confirmedCount} bekreftede registreringer · {document.draftCount} utkast</span>
+                </>}
+                <span>Dokumentreferanse {document.documentId}</span>
+              </button>
+            </li>)}
             {documents.map(run => (
               <li key={run.id}>
                 <button type="button" className="run-button" aria-disabled={busy} onClick={() => onOpenRun(run.id)}>
@@ -105,7 +121,10 @@ export function InstructorOverview({ view, busy, selectingDriver, onNewDriver, o
                 </button>
               </li>
             ))}
-          </ul> : <p>{instructor ? 'Det er ingen vurderinger for denne registreringen.' : 'Det er ingen tekniske dokumenter for denne sjåføren.'}</p>}
+          </ul> : <>
+            {instructor && <p>Det er ingen vurderinger for denne registreringen.</p>}
+            <p>Det er ingen opplæringsdokumenter for denne sjåføren.</p>
+          </>}
         </section>
       )}
     </>

@@ -1,4 +1,4 @@
-import type { RunStore, Selection, WorkspaceState } from '../../application/run-store.ts'
+import type { DocumentSelection, LineRoleContext, RunStore, Selection, WorkspaceState } from '../../application/run-store.ts'
 import {
   AppError, assessmentContext, canReadAssessment, createDriver, findDay, isId, isRole, runDays, sameDriverReference,
   validDriverReference, validateSavedRun,
@@ -23,24 +23,29 @@ import {
   technicalSummary, validateSavedTechnical, validateTechnicalCommand,
 } from '../../domain/technical-training.ts'
 import type { TechnicalCommand, TechnicalReadProblem, TechnicalReceipt, TechnicalSelection, TechnicalTraining } from '../../domain/technical-training.ts'
+import { applyLineCommand, createLineTraining, lineDocumentType, lineSummary, validateLineCommand, validateSavedLine } from '../../domain/line-training.ts'
+import type { LineCommand, LineReadProblem, LineReceipt, LineSelection, LineTraining } from '../../domain/line-training.ts'
+import type { ErrorCode } from '../../domain/run.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 const META = 'meta'
 const RUNS = 'runs'
 const DRIVERS = 'drivers'
 const TECHNICAL_DOCUMENTS = 'technicalDocuments'
+const LINE_DOCUMENTS = 'lineDocuments'
 const COMMANDS = 'commands'
 const SCHEMA = 'schema'
 const SESSION = 'session'
 
-type SavedSession = { actors: Record<Role, string>; role: Role; selection?: Selection; driverId?: string; document?: TechnicalSelection }
+type SavedSession = { actors: Record<Role, string>; role: Role; selection?: Selection; driverId?: string; document?: DocumentSelection }
 type Envelope<T> = { schemaVersion: number; data: T }
 type SavedRun = Envelope<Run>
 type SavedReceipt<T = RunReceipt> = Envelope<{ fingerprint: string; receipt: T }>
 type SavedDriver = Envelope<DriverReference>
 type SavedTechnical = Envelope<TechnicalTraining>
+type SavedLine = Envelope<LineTraining>
 
 function envelope<T>(data: T): Envelope<T> {
   return { schemaVersion: SCHEMA_VERSION, data }
@@ -102,7 +107,7 @@ function migrateRun(key: IDBValidKey, run: Run, drivers: Map<string, DriverRefer
 }
 
 function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
-  if (previousVersion < 1 || previousVersion > 4) throw new AppError('unsupported_schema')
+  if (previousVersion < 1 || previousVersion >= SCHEMA_VERSION) throw new AppError('unsupported_schema')
   const meta = tx.objectStore(META)
   const legacy = previousVersion < 4
   const driversStore = legacy ? tx.db.createObjectStore(DRIVERS) : tx.objectStore(DRIVERS)
@@ -115,7 +120,10 @@ function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
     }
     meta.put({ ...schema.result, schemaVersion: SCHEMA_VERSION }, SCHEMA)
   }
-  for (const name of legacy ? [META, RUNS, COMMANDS] : [META, RUNS, COMMANDS, DRIVERS]) {
+  const stores = [META, RUNS, COMMANDS]
+  if (!legacy) stores.push(DRIVERS)
+  if (previousVersion >= 5) stores.push(TECHNICAL_DOCUMENTS)
+  for (const name of stores) {
     const request = tx.objectStore(name).openCursor()
     request.onsuccess = () => {
       try {
@@ -129,6 +137,10 @@ function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
         if (name !== META || cursor.key === SESSION) {
           const record = cursor.value as Envelope<unknown>
           if (record?.schemaVersion !== previousVersion || !Object.hasOwn(record, 'data')) {
+            if (name === TECHNICAL_DOCUMENTS) {
+              cursor.continue()
+              return
+            }
             throw new AppError('unsupported_schema')
           }
           // Historiske snapshots og kvitteringer beholder originalt innhold.
@@ -160,7 +172,8 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
         tx.abort()
         return
       }
-      request.result.createObjectStore(TECHNICAL_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
+      if (event.oldVersion < 5) request.result.createObjectStore(TECHNICAL_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
+      request.result.createObjectStore(LINE_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
       if (event.oldVersion === 0) {
         const db = request.result
         db.createObjectStore(META).add({ schemaVersion: SCHEMA_VERSION }, SCHEMA)
@@ -304,24 +317,68 @@ function readTechnical(record: SavedTechnical, documentId?: string) {
 function getTechnicalRecord<T>(
   operations: Operations<T>, selection: TechnicalSelection, session: SavedSession, next: (record: SavedTechnical) => void,
 ) {
-  if (selection?.documentType !== technicalDocumentType || !isId(selection.documentId)) throw new AppError('invalid_command')
+  getDocumentRecord<T, TechnicalTraining>(operations, selection, session, TECHNICAL_DOCUMENTS, technicalDocumentType,
+    'technical_document_missing', next)
+}
+
+function getDocumentRecord<T, D extends { driverRef: string }>(
+  operations: Operations<T>, selection: DocumentSelection, session: SavedSession, store: string,
+  type: DocumentSelection['documentType'], missing: ErrorCode, next: (record: Envelope<D>, driver: DriverReference) => void,
+) {
+  if (selection?.documentType !== type || !isId(selection.documentId)) throw new AppError('invalid_command')
   if (session.role === 'fadder' || !session.driverId) throw new AppError('wrong_role')
-  operations.get<SavedTechnical>(TECHNICAL_DOCUMENTS, selection.documentId, record => {
-    if (!record) throw new AppError('technical_document_missing')
+  operations.get<Envelope<D>>(store, selection.documentId, record => {
+    if (!record) throw new AppError(missing)
     const document = record.data
     assertTechnicalAccess(session.role, session.driverId, document?.driverRef)
     const key = driverKey(document.driverRef)
-    operations.get<SavedDriver>(DRIVERS, key, driver => {
-      if (!driver || readDriver(driver, key).id !== document.driverRef) throw new AppError('driver_reference_missing')
-      next(record)
-    })
+    getDriverReference(operations, document.driverRef, key, driver => next(record, driver))
   })
 }
 
-function assertTechnicalSelection(session: SavedSession, selection: TechnicalSelection) {
+function getDriverReference<T>(operations: Operations<T>, id: string, key: string, next: (driver: DriverReference) => void) {
+  operations.get<SavedDriver>(DRIVERS, key, record => {
+    if (!record) throw new AppError('driver_reference_missing')
+    const driver = readDriver(record, key)
+    if (driver.id !== id) throw new AppError('driver_reference_missing')
+    next(driver)
+  })
+}
+
+function assertDocumentSelection(session: SavedSession, selection: DocumentSelection) {
   if (session.document?.documentType !== selection.documentType || session.document.documentId !== selection.documentId) {
     throw new AppError('stale')
   }
+}
+
+function readLine(record: SavedLine, documentId: string) {
+  const document = validateSavedLine(check(record))
+  if (document.documentId !== documentId) throw new AppError('line_document_missing')
+  return document
+}
+
+function listDocuments<D, S, P extends DocumentSelection & { error: ErrorCode }>(
+  records: [IDBValidKey, Envelope<D>][], active: DocumentSelection | undefined, type: P['documentType'], missing: ErrorCode,
+  read: (record: Envelope<D>, id: string) => D, summarize: (document: D) => S,
+) {
+  const list: (S | P)[] = []
+  let current: D | undefined
+  let problem: P | undefined
+  const activeId = active?.documentType === type ? active.documentId : undefined
+  for (const [documentId, record] of records) {
+    if (!isId(documentId)) continue
+    try {
+      const document = read(record, documentId)
+      list.push(summarize(document))
+      if (activeId === documentId) current = document
+    } catch (error) {
+      const failure = { documentType: type, documentId, error: error instanceof AppError ? error.code : 'storage_read' } as P
+      list.push(failure)
+      if (activeId === documentId) problem = failure
+    }
+  }
+  if (activeId && !current && !problem) problem = { documentType: type, documentId: activeId, error: missing } as P
+  return { list, current, problem }
 }
 
 function workspace(operations: Operations<WorkspaceState>, session: SavedSession) {
@@ -341,43 +398,34 @@ function workspace(operations: Operations<WorkspaceState>, session: SavedSession
       const driverActor = session.actors.sjåfør
       const { document, driverId, role } = session
       const canView = driverId !== undefined && canReadTechnical(role, driverId, driverId)
-      function finish(records: [IDBValidKey, SavedTechnical][] = []) {
-        const activeDocument = canView && !selection && document?.documentType === technicalDocumentType && isId(document.documentId)
-          ? document : undefined
-        let technical: TechnicalTraining | undefined
-        let technicalProblem: TechnicalReadProblem | undefined
-        const technicalDocuments: WorkspaceState['technicalDocuments'] = []
-        for (const [documentId, record] of records) {
-          if (!isId(documentId)) continue
-          try {
-            const current = readTechnical(record, documentId)
-            technicalDocuments.push(technicalSummary(current, driverActor))
-            if (activeDocument?.documentId === documentId) technical = current
-          } catch (failure) {
-            const problem: TechnicalReadProblem = {
-              documentType: technicalDocumentType, documentId, error: failure instanceof AppError ? failure.code : 'storage_read',
-            }
-            technicalDocuments.push(problem)
-            if (activeDocument?.documentId === documentId) technicalProblem = problem
-          }
-        }
-        if (activeDocument && !technical && !technicalProblem) {
-          technicalProblem = { ...activeDocument, error: 'technical_document_missing' }
-        }
+      function finish(technicalRecords: [IDBValidKey, SavedTechnical][] = [], lineRecords: [IDBValidKey, SavedLine][] = []) {
+        const active = canView && !selection && isId(document?.documentId) ? document : undefined
+        const technical = listDocuments<TechnicalTraining, ReturnType<typeof technicalSummary>, TechnicalReadProblem>(
+          technicalRecords, active, technicalDocumentType, 'technical_document_missing', readTechnical,
+          current => technicalSummary(current, driverActor),
+        )
+        const line = listDocuments<LineTraining, ReturnType<typeof lineSummary>, LineReadProblem>(
+          lineRecords, active, lineDocumentType, 'line_document_missing', readLine, lineSummary,
+        )
         operations.finish({
           session: { actor: { id: session.actors[role], role }, selection, driverId, document },
-          runs, drivers, technical, technicalProblem, technicalDriverActorId: driverActor, technicalDocuments,
+          runs, drivers, technical: technical.current, technicalProblem: technical.problem,
+          technicalDriverActorId: driverActor, technicalDocuments: technical.list,
+          lineTraining: line.current, lineProblem: line.problem, lineDocuments: line.list,
         })
       }
       if (canView) {
-        operations.indexed<SavedTechnical>(TECHNICAL_DOCUMENTS, 'driverRef', driverId, finish)
+        operations.indexed<SavedTechnical>(TECHNICAL_DOCUMENTS, 'driverRef', driverId, techRecords => {
+          operations.indexed<SavedLine>(LINE_DOCUMENTS, 'driverRef', driverId, lineRecords => finish(techRecords, lineRecords))
+        })
       } else finish()
     })
   })
 }
 
 const TECHNICAL = [META, DRIVERS, TECHNICAL_DOCUMENTS]
-const WORKSPACE = [...TECHNICAL, RUNS]
+const LINE = [META, DRIVERS, LINE_DOCUMENTS]
+const WORKSPACE = [...TECHNICAL, LINE_DOCUMENTS, RUNS]
 
 export class IndexedDbRunStore implements RunStore {
   readonly #factory: IDBFactory | undefined
@@ -476,8 +524,9 @@ export class IndexedDbRunStore implements RunStore {
     })
   }
 
-  changeRole(role: Role, selection?: Selection | null): Promise<WorkspaceState> {
+  changeRole(role: Role, selection?: Selection | null, expectedLine?: LineRoleContext): Promise<WorkspaceState> {
     const displayed = selection && { ...selection }
+    const expected = expectedLine && structuredClone(expectedLine)
     return this.#withDatabase(WORKSPACE, 'readwrite', operations => {
       loadSession(operations, session => {
         if (!isRole(role) || !isId(session.actors[role])) throw new AppError('invalid_command')
@@ -485,8 +534,20 @@ export class IndexedDbRunStore implements RunStore {
           ...session, role, selection: selection === null ? undefined : displayed ?? session.selection,
           document: role === 'fadder' || selection !== undefined ? undefined : session.document,
         }
-        operations.put(META, SESSION, envelope(changed))
-        workspace(operations, changed)
+        function commit() {
+          operations.put(META, SESSION, envelope(changed))
+          workspace(operations, changed)
+        }
+        if (!expected) return commit()
+        if (role !== 'sjåfør' || expected.actor.role !== 'instruktør' || selection !== undefined) throw new AppError('invalid_command')
+        requireActiveActor(session, expected.actor)
+        if (session.driverId !== expected.driverRef || session.selection) throw new AppError('stale')
+        assertDocumentSelection(session, expected.document)
+        getDocumentRecord<WorkspaceState, LineTraining>(operations, expected.document, session,
+          LINE_DOCUMENTS, lineDocumentType, 'line_document_missing', record => {
+            readLine(record, expected.document.documentId)
+            commit()
+          })
       })
     })
   }
@@ -696,7 +757,7 @@ export class IndexedDbRunStore implements RunStore {
     const address = { ...selection }
     return this.#withDatabase(TECHNICAL, 'readonly', operations => {
       loadSession(operations, session => getTechnicalRecord(operations, address, session, record => {
-        if (requireSelected) assertTechnicalSelection(session, address)
+        if (requireSelected) assertDocumentSelection(session, address)
         const document = readTechnical(record, address.documentId)
         if (session.role === 'sjåfør' && document.status === 'draft') operations.finish(document)
         else operations.finish({ ...document, points: document.points.map(({ id, status, author, reason }) => ({ id, status, author, reason })) })
@@ -725,7 +786,7 @@ export class IndexedDbRunStore implements RunStore {
             operations.finish(receipt)
           }
           if (command.kind !== 'create-technical-training') {
-            assertTechnicalSelection(session, command)
+            assertDocumentSelection(session, command)
             getTechnicalRecord(operations, command, session,
               record => commit(applyTechnicalCommand(readTechnical(record, command.documentId), command, session.actors.sjåfør)))
             return
@@ -739,6 +800,71 @@ export class IndexedDbRunStore implements RunStore {
               if (existing) throw new AppError('stale')
               commit(createTechnicalTraining(command, reference))
               const { documentId, documentType } = command
+              operations.put(META, SESSION, envelope({ ...session, selection: undefined, document: { documentId, documentType } }))
+            })
+          })
+        })
+      })
+    })
+  }
+
+  selectLineTraining(selection: LineSelection): Promise<WorkspaceState> {
+    const address = { documentType: selection.documentType, documentId: selection.documentId }
+    return this.#withDatabase(WORKSPACE, 'readwrite', operations => {
+      loadSession(operations, session => getDocumentRecord<WorkspaceState, LineTraining>(operations, address, session,
+        LINE_DOCUMENTS, lineDocumentType, 'line_document_missing', () => {
+          const selected = { ...session, selection: undefined, document: address }
+          operations.put(META, SESSION, envelope(selected))
+          workspace(operations, selected)
+        }))
+    })
+  }
+
+  readLineTraining(selection: LineSelection, requireSelected = false): Promise<LineTraining> {
+    const address = { ...selection }
+    return this.#withDatabase(LINE, 'readonly', operations => {
+      loadSession(operations, session => getDocumentRecord<LineTraining, LineTraining>(operations, address, session,
+        LINE_DOCUMENTS, lineDocumentType, 'line_document_missing', record => {
+          if (requireSelected) assertDocumentSelection(session, address)
+          operations.finish(readLine(record, address.documentId))
+        }))
+    })
+  }
+
+  executeLineTraining(command: LineCommand, fingerprint: string): Promise<LineReceipt> {
+    validateLineCommand(command)
+    return this.#withDatabase([...LINE, COMMANDS], 'readwrite', operations => {
+      operations.get<SavedReceipt<LineReceipt>>(COMMANDS, command.commandId, saved => {
+        if (saved) {
+          const previous = check(saved)
+          if (previous.fingerprint !== fingerprint) throw new AppError('command_conflict')
+          operations.finish(previous.receipt)
+          return
+        }
+        loadSession(operations, session => {
+          requireActiveActor(session, command.actor)
+          assertTechnicalAccess(session.role, session.driverId, command.driverRef)
+          function commit(document: LineTraining) {
+            const { documentId, documentType, revision } = document
+            const receipt: LineReceipt = { documentId, documentType, revision,
+              ...(command.kind === 'confirm-line-training-entries' && { sourceVersion: document.snapshots.length }) }
+            operations.put(LINE_DOCUMENTS, documentId, envelope(document))
+            operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
+            operations.finish(receipt)
+          }
+          if (command.kind !== 'create-line-training') {
+            assertDocumentSelection(session, command)
+            getDocumentRecord<LineReceipt, LineTraining>(operations, command, session, LINE_DOCUMENTS, lineDocumentType,
+              'line_document_missing', (record, driver) => commit(applyLineCommand(
+                check(record), command, driver, session.actors.sjåfør,
+              )))
+            return
+          }
+          const { driverRef, documentId, documentType } = command
+          getDriverReference(operations, driverRef, driverKey(driverRef), driver => {
+            operations.get<SavedLine>(LINE_DOCUMENTS, documentId, existing => {
+              if (existing) throw new AppError('stale')
+              commit(createLineTraining(command, driver))
               operations.put(META, SESSION, envelope({ ...session, selection: undefined, document: { documentId, documentType } }))
             })
           })

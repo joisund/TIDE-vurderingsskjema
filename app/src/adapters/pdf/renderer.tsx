@@ -1,6 +1,7 @@
 import { Document, Font, Image, Page, Text, pdf } from '@react-pdf/renderer'
 import { PdfRenderingError } from '../../application/run-pdf.ts'
-import type { RenderClosurePdf, RenderTechnicalPdf } from '../../application/run-pdf.ts'
+import type { RenderClosurePdf, RenderLinePdf, RenderTechnicalPdf } from '../../application/run-pdf.ts'
+import { linePdfLayoutVersion } from '../../domain/line-training.ts'
 // Originalen rendret på hvit papirflate, med samme pikselmål og uten alfakanal.
 // Da trenger ikke PDFKit å starte en ny PNG-dekodingsworker per side.
 import logo from './tide-logo-pdf.png?inline'
@@ -9,6 +10,7 @@ import boldFont from './fonts/NotoSans-Bold.ttf?url&no-inline'
 import { closureDocument, pdfFont } from './closure-document.tsx'
 import { pdfBlobFromStream } from './pdf-stream.ts'
 import { technicalDocument } from './technical-document.tsx'
+import { lineDocument } from './line-document.tsx'
 
 let pdfReady = false
 let preparation: { signal: AbortSignal; done: Promise<void> } | undefined
@@ -88,4 +90,10 @@ export const renderTechnicalPdf: RenderTechnicalPdf = async (source, signal) => 
   if (!pdfReady) throw new PdfRenderingError('PDF-skriften og de øvrige ressursene er ikke klargjort.')
   if (source.pdfLayoutVersion !== 1) throw new PdfRenderingError('PDF-oppsettet for teknisk opplæring støttes ikke.')
   return pdfBlobFromStream(() => pdf(technicalDocument({ logo, source })).toBuffer(), signal)
+}
+
+export const renderLinePdf: RenderLinePdf = async (source, signal) => {
+  if (!pdfReady) throw new PdfRenderingError('PDF-skriften og de øvrige ressursene er ikke klargjort.')
+  if (source.pdfLayoutVersion !== linePdfLayoutVersion) throw new PdfRenderingError('PDF-oppsettet for linjeopplæring støttes ikke.')
+  return pdfBlobFromStream(() => pdf(lineDocument({ logo, source })).toBuffer(), signal)
 }

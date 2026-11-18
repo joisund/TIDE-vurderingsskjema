@@ -44,10 +44,11 @@ function technicalPdfError(error: unknown) {
   return 'PDF-en kunne ikke opprettes. Prøv igjen.'
 }
 
-export function PdfDownload({ busy, download, report, describeError = technicalPdfError }: {
+export function PdfDownload({ busy, download, report, label = 'Last ned PDF', describeError = technicalPdfError }: {
   busy: boolean
   download: (signal: AbortSignal) => Promise<{ blob: Blob; filename: string }>
   report: (error: unknown) => void
+  label?: string
   describeError?: (error: unknown) => string
 }) {
   const attempt = useRef<AbortController>(undefined)
@@ -100,7 +101,7 @@ export function PdfDownload({ busy, download, report, describeError = technicalP
       <div className="actions">
         <button type="button" className="button primary" aria-disabled={busy || generating}
           aria-describedby={failure ? 'run-pdf-error' : undefined} onClick={() => { void startDownload() }}>
-          {failure ? 'Prøv å laste ned PDF igjen' : 'Last ned PDF'}
+          {failure ? 'Prøv å laste ned PDF igjen' : label}
         </button>
       </div>
       <p aria-live="polite" aria-atomic="true">{notice}</p>

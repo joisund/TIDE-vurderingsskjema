@@ -29,6 +29,15 @@ const messages: Record<ErrorCode, string> = {
   technical_points: 'Sjekklisten samsvarer ikke med de 52 punktene i Volvo-malen.',
   technical_incomplete: 'Den tekniske opplæringen mangler gyldige opplysninger. Kjør dokumentkontrollen på nytt.',
   technical_instructor: 'Skriv navnet på instruktøren som bekrefter. Det må samsvare med instruktørnavnet i dokumentet.',
+  line_document_missing: 'Linjeoversikten finnes ikke for valgt sjåfør. Åpne dokumentoversikten på nytt.',
+  line_version: 'Denne versjonen av linjemalen, dokumentreglene eller PDF-oppsettet støttes ikke.',
+  line_template: 'Linjeoversikten samsvarer ikke med de 26 linjene i malen.',
+  line_history: 'Den bekreftede linjehistorikken er ufullstendig eller samsvarer med feil versjon.',
+  line_source_missing: 'Den valgte bekreftede historikkversjonen finnes ikke.',
+  line_incomplete: 'De valgte registreringene mangler gyldige opplysninger. Kontroller utvalget på nytt.',
+  line_instructor: 'Skriv navnet på instruktøren som bekrefter.',
+  line_clock: 'Klokka på enheten viser et tidspunkt før den lagrede historikken. Kontroller klokka og prøv igjen.',
+  line_revision_limit: 'Linjeoversikten har nådd grensen for revisjoner. Den lagrede historikken kan fortsatt leses.',
 }
 
 export function explain(error: unknown) {

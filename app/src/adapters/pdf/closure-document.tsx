@@ -77,9 +77,9 @@ function loadedFont(fontWeight: 400 | 700) {
   return Font.getFont({ fontFamily: pdfFont, fontWeight, fontStyle: 'normal' }).data!
 }
 
-function textWidth(text: string, fontSize: number, fontWeight: 400 | 700 = 400) {
+export function textWidth(text: string, fontSize: number, fontWeight: 400 | 700 = 400, features?: Record<string, boolean>) {
   const font = loadedFont(fontWeight)
-  return font.layout(text).advanceWidth * fontSize / font.unitsPerEm
+  return font.layout(text, features).advanceWidth * fontSize / font.unitsPerEm
 }
 
 export function flowing(text: string, width = 530, fontSize = 9, fontWeight: 400 | 700 = 400) {
@@ -115,7 +115,14 @@ export function assertGlyphs(texts: Iterable<string>) {
       const code = character.codePointAt(0)!
       if (checked.has(code) || /^[\r\n\t]$/.test(character)) continue
       checked.add(code)
-      if (!regular.hasGlyphForCodePoint(code) || !bold.hasGlyphForCodePoint(code)) missing.add(code)
+      for (const font of [regular, bold]) {
+        if (!font.hasGlyphForCodePoint(code)) missing.add(code)
+        else {
+          // Fontkit kan ha lastet glyfen som komponent i et tidligere uttak uten Unicode-verdi.
+          const glyph = font.glyphForCodePoint(code)
+          if (!glyph.codePoints.length) glyph.codePoints.push(code)
+        }
+      }
     }
   }
   if (missing.size) {

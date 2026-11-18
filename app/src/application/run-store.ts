@@ -11,9 +11,12 @@ import type { CloseRunCommand, SaveConclusionCommand } from '../domain/closure.t
 import type {
   TechnicalCommand, TechnicalReadProblem, TechnicalReceipt, TechnicalSelection, TechnicalSummary, TechnicalTraining,
 } from '../domain/technical-training.ts'
+import type { LineCommand, LineReadProblem, LineReceipt, LineSelection, LineSummary, LineTraining } from '../domain/line-training.ts'
 
 export type Selection = { runId: string; dayId: string }
-export type Session = { actor: Actor; selection?: Selection; driverId?: string; document?: TechnicalSelection }
+export type DocumentSelection = TechnicalSelection | LineSelection
+export type LineRoleContext = { actor: Actor; driverRef: string; document: LineSelection }
+export type Session = { actor: Actor; selection?: Selection; driverId?: string; document?: DocumentSelection }
 export type WorkspaceState = {
   session: Session
   runs: Run[]
@@ -22,6 +25,9 @@ export type WorkspaceState = {
   technical?: TechnicalTraining
   technicalProblem?: TechnicalReadProblem
   technicalDriverActorId: string
+  lineDocuments: (LineSummary | LineReadProblem)[]
+  lineTraining?: LineTraining
+  lineProblem?: LineReadProblem
 }
 
 export interface RunStore {
@@ -45,8 +51,11 @@ export interface RunStore {
   select(runId: string, dayId?: string): Promise<WorkspaceState>
   showDrivers(): Promise<WorkspaceState>
   selectDriver(driverId: string): Promise<WorkspaceState>
-  changeRole(role: Role, selection?: Selection | null): Promise<WorkspaceState>
+  changeRole(role: Role, selection?: Selection | null, expectedLine?: LineRoleContext): Promise<WorkspaceState>
   executeTechnical(command: TechnicalCommand, fingerprint: string): Promise<TechnicalReceipt>
   readTechnical(selection: TechnicalSelection, requireSelected?: boolean): Promise<TechnicalTraining>
   selectTechnical(selection: TechnicalSelection): Promise<WorkspaceState>
+  executeLineTraining(command: LineCommand, fingerprint: string): Promise<LineReceipt>
+  readLineTraining(selection: LineSelection, requireSelected?: boolean): Promise<LineTraining>
+  selectLineTraining(selection: LineSelection): Promise<WorkspaceState>
 }

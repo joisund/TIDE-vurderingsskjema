@@ -1,6 +1,8 @@
 # Lokal implementeringsøkt 17.–18. november 2026
 
-Arbeidet pågår på `codex/fadder-v1` i den eksisterende lokale arbeidskopien. Utgangspunktet er `de6e36c2b4a069e0653fd3d9777948f187fba8d2`. Før oppstart lå det endringer i planleggingen og rotens overleveringsnotat. De beholdes i arbeidskopien. Prioritert kjede er Story 1.1–1.8, så 2.1–2.2, deretter 3.1–3.3. Følg [sprintstatus](sprint-status.yaml) og godkjente planleggingskilder ved gjenopptakelse.
+Alle 13 stories er implementert og kodegjennomgått på `codex/fadder-v1` i den eksisterende lokale arbeidskopien. Utgangspunktet var `de6e36c2b4a069e0653fd3d9777948f187fba8d2`. Den lokale commitrekken fulgte Story 1.1–1.8, deretter 2.1–2.2 og 3.1–3.3. Følg [sprintstatus](sprint-status.yaml) og godkjente planleggingskilder ved gjenopptakelse.
+
+Alle 120 akseptansekriteriene i de 13 utviklerpakkene er sammenlignet ordrett med de godkjente forslagene. Status `review` beholdes så lenge obligatoriske enhetsprøver står åpne.
 
 ## Gjennomført miljøkontroll
 
@@ -33,6 +35,8 @@ Bruk portable Node fra oppstarten nedenfor og start frosset lokal instruktørpr�
 
 ## Story 3.2
 
+Teknisk opplæring er committet lokalt i `4fbaafebc46db99bdb43eae19cadbe56e446cfda`. Story 3.3 bygde videre fra den commiten. Linjekilden er visuelt kontrollert og har 26 linjer i godkjent rekkefølge, inklusive merknaden ved linje 30. PDF-kontrollen reproduserte manglende søketegn etter tidligere fontinnbygging og en skilt linjeoverskrift ved sideskift. Begge feilene ble rettet og prøvd med nye faktiske filer. [Utviklerpakken for linjeopplæring](3-3-dokumentere-linjeopplæring-og-videreføre-bekreftet-historikk.md).
+
 Teknisk opplæring er prøvd i en tidlig kandidat fra S11 til bekreftet, selvstendig PDF fra begge roller. Kildekontroll viser riktig 13/13/14/12. Edge har prøvd både 52 gjennomgått og blandet føring, avbrutt lagring før complete, bevart inntasting ved avvist rollebytte, foreldet kontroll i en annen fane og atomisk bekreftelsesretry. WebKit opprettet, fylte, bekreftet og eksporterte etter 60 046 ms uten nettforespørsler. Windows Edge med NVDA leste opp navngitt avkryssing, feltfeil, dialog og lagringsstatus. Faktisk 400 % Chromium-zoom og de vedtatte CSS-breddene ble prøvd på PC. Oppgraderingen fra schema 4 bevarte begge PDF-typene og fem eldre vurderingsløp.
 
 Første prøvesett avdekket sidetall utenfor sideflaten og titteloverlapp på forsiden. Begge layoutfeil ble rettet og kontrollert i en ny faktisk eksport med ni stående A4-sider, alle 52 punkter, to aktive begrunnelser på 10 000 tegn og ett ettordsunntak. Edges innebygde leser ga ett treff på tekst helt sist i den andre lange begrunnelsen. Tre uavhengige kodegjennomganger ble fulgt opp med blant annet avgrenset dokumentfeil, gjenoppretting fra konflikt, fjerning av gammel DOM fra tilbakebuffer og fungerende første klikk i vedvarende Firefox. Sluttbygget bestod 73 Node-prøver og 287 av 288 nettleserprøver. Én Chromium-prøve fikk en Windows-nettverksfeil før lasting og bestod fire av fire forsøk på samme sluttbygg isolert. Seks tekniske PDF-er i tre motorer ble lest uavhengig fra appen. Fysisk prøve står i review. [Storyens detaljer](3-2-dokumentere-teknisk-opplæring-med-egen-bekreftelse-og-pdf.md).
@@ -41,7 +45,19 @@ Bruk portable Node og start frosset teknisk PC-prøve fra app-mappen:
 
     npm.cmd run preview -- --host 127.0.0.1 --port 4185 --strictPort --outDir ../.cache/story-3-2/verified-dist
 
-Åpne [teknisk prøve på PC](http://127.0.0.1:4185). Velg en fiktiv sjåfør under Instruktør, opprett teknisk opplæring, og bytt til Sjåfør for å føre 52 punkter med minst ett begrunnet kjøretøyunntak. Bytt tilbake, kontroller og oppgi samme instruktørnavn ved bekreftelsen. Åpne PDF fra begge roller og sjekk at riktig person fremgår som utfyller og bekrefter. Port 4183 og 4184 har de tidligere frosne fadder- og instruktørprøvene. Hver port har eget lokalt lager.
+Åpne [teknisk prøve på PC](http://127.0.0.1:4185). Edge 157.0.4341.60 åpnet sluttbygget på denne adressen på 656 ms og nådde teknisk skjema fra S11. Velg en fiktiv sjåfør under Instruktør, opprett teknisk opplæring, og bytt til Sjåfør for å føre 52 punkter med minst ett begrunnet kjøretøyunntak. Bytt tilbake, kontroller og oppgi samme instruktørnavn ved bekreftelsen. Åpne PDF fra begge roller og sjekk at riktig person fremgår som utfyller og bekrefter. Port 4183 og 4184 har de tidligere frosne fadder- og instruktørprøvene. Hver port har eget lokalt lager.
+
+## Story 3.3 og samlet V1-bygg
+
+Frosset `story-3.3-20261118-final` ligger i `.cache/story-3-3/verified-dist`. Typekontroll, produksjonsbygg, lint, 79 Node-prøver og 303 nettleserprøver passerte. På sluttbygget prøvde Edge alle 26 linjer og 54 bekreftede kjøringer, beskyttet tidligere versjon og beholdt nyere utkast. Samme bygg avviste foreldet rettetast i to faner, satte fokus i riktig linjevelger, holdt ulagret dato tilgjengelig ved lesefeil og gjenåpnet lagret verdi etter uttrykkelig forkasting. Kald gjenåpning av den valgte linjeoversikten tok 1468 ms. Ni linje-PDF-er og seks tekniske PDF-er fra sluttregresjonen ble lest uavhengig mot de frosne kildene. Det ordinære todagers fadderløpet på samme bygg ga 110 verifiserte ruter fra begge roller og første PDF etter 61 064 ms frakoblet. [Utviklerpakken for linjeopplæring](3-3-dokumentere-linjeopplæring-og-videreføre-bekreftet-historikk.md).
+
+Bruk portable Node fra oppstarten nedenfor og kjør dette i app-mappen for den samlede lokale prøven:
+
+    npm.cmd run preview -- --host 127.0.0.1 --port 4186 --strictPort --outDir ../.cache/story-3-3/verified-dist
+
+Åpne [samlet V1-prøve på PC](http://127.0.0.1:4186). Edge åpnet denne adressen på 720 ms. Prøv først fadderløpet med to dager og begge PDF-rollene. Velg deretter en ny fiktiv sjåfør under Instruktør, registrer linje 30 og en ekstra linje på to daterte utkast som Sjåfør, og bekreft bare linje 30 som Instruktør. Hent versjon 1. Før en ny dato som Sjåfør. Bekreft den med et annet fiktivt instruktørnavn og last ned begge historikkversjonene. Sjekk at første fil viser første kjøring, ny fil beholder begge bekreftelsene, og utkast som står igjen omtales i appen før nedlasting.
+
+Eksempler fra sluttbygget er [todagers fadder-PDF](../../.cache/story-3-3/fadder-sluttbygg/vurdering-2-dager-fadder-lang.pdf), [teknisk PDF](../../.cache/story-3-3/slutteksporter/teknisk-instruktor.pdf) og [linje-PDF versjon 2](../../.cache/story-3-3/actual-verified-dist-Edge-wide-faults/v2-sjåfør.pdf).
 
 ## Lokal oppstart
 
@@ -91,7 +107,7 @@ Den medfølgende Python-pakken er verifisert med `pypdf` og `pdfplumber` på sam
 
 En separat lokal Vite 8.3.5-side lastet begge fonter med `Font.load` før registrering. Etter simulert nettbrudd genererte og lastet Chromium 151.0.7922.34, Firefox 153.0 og WebKit 26.5 ned en PDF med gyldig filheader. WebKit feilet først da prøveprogrammet forsøkte `Blob.slice(...).text()` før nedlasting. Kontroll av selve nedlastingen passerte. Vurderingsinnhold, appens nedlastingsflate, lengre tekster og faktisk mobilåpning verifiseres i Story 2.2.
 
-En separat Node-prøve fordelte 10 000 tegn med fiktiv tekst på to stående A4-sider. Gjentatt overskrift og riktige sidetall ble kontrollert visuelt. Tekstuttrekket matchet alle tegn utenom linjebryting og blanktegn. Komplett eksport med faktisk vurderingsdata gjenstår.
+En separat Node-forprøve fordelte 10 000 tegn med fiktiv tekst på to stående A4-sider. Gjentatt overskrift og riktige sidetall ble kontrollert visuelt. De påfølgende app-prøvene kontrollerte faktisk eksport mot lagret vurderingsgrunnlag i Story 2.2 og teknisk dokumentgrunnlag i Story 3.2.
 
 En prøve med 10 000 tegn uten mellomrom viste at standard tekstflyt alene kan plassere tekst utenfor sidebredden. Med usynlige linjeskiftmuligheter i visningskopien fordelt over tre sider var alle 10 000 tegn innenfor tekstområdet. Story 2.2 må prøve lange, ubrutte ordstrenger i det faktiske PDF-oppsettet.
 
@@ -115,4 +131,4 @@ Fast HTTPS-origin og faktisk prøving etter [nettbrettprotokollen](nettbrett-tes
 
 For AD-2s senere manifestprøve krever Chromiums installasjonspromotering et manifest med navn, startadresse, visningsmodus og 192/512 px ikoner over HTTPS. Safari 26 kan legge en side til som webapp fra delingsmenyen. Noter den faktiske installerte profilen ved prøving av lageret. [Chromiums kriterier](https://web.dev/articles/install-criteria) og [WebKit om Safari 26](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/).
 
-NVDA 2026.3.1 i Edge leste «Løpsoversikt» og «Opprett løp» i den isolerte Windows-prøven 18. november. Edge-tilgang ble verifisert. En Windows-brannmurmelding for en lokal Node-prosess lå foran vinduet ved første forsøk. I det frosne 1.5-bygget åpnet NVDA «Begrunn Ikke relevant» og leste rolle, fiktiv fadder, dag 1, «Korrekt uniform/hygiene», feltnavnet og A10-kravet. Vinduet kunne inspiseres i Windows' tilgjengelighetstre. En OS-overflate hindret ny fokusering av testfeltet med verktøyet. Opplesing av faktisk feltfeil, fokusretur og dynamisk lagringsstatus gjenstår.
+NVDA 2026.3.1 i Edge leste «Løpsoversikt» og «Opprett løp» i den isolerte Windows-prøven 18. november. En Windows-overflate lå foran vinduet ved første forsøk. I det frosne 1.5-bygget leste NVDA «Begrunn Ikke relevant», rolle, fiktiv fadder, dag 1, kriterium, feltnavn og A10-krav. Ny fokusering i akkurat den sekvensen ble hindret av Windows-overflaten. Faktiske feltfeil og dynamisk lagringsstatus ble senere lest i S11 og S12. Se de berørte utviklerpakkene for omfanget av hver prøve.

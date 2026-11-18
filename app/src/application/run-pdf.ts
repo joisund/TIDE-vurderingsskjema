@@ -1,11 +1,15 @@
 import type { ClosureSnapshot } from '../domain/closure.ts'
 import type { RunApplication } from './run-application.ts'
 import type { TechnicalSelection, TechnicalSnapshot } from '../domain/technical-training.ts'
+import type { LineSelection, LineTrainingSnapshot } from '../domain/line-training.ts'
 
 export type RenderClosurePdf = (source: ClosureSnapshot, signal?: AbortSignal) => Promise<Blob>
 export type DownloadRunPdf = (runId: string, signal?: AbortSignal) => Promise<{ blob: Blob; filename: string }>
 export type RenderTechnicalPdf = (source: TechnicalSnapshot, signal?: AbortSignal) => Promise<Blob>
 export type DownloadTechnicalPdf = (document: TechnicalSelection, signal?: AbortSignal) => Promise<{ blob: Blob; filename: string }>
+export type RenderLinePdf = (source: LineTrainingSnapshot, signal?: AbortSignal) => Promise<Blob>
+export type LinePdfAddress = LineSelection & { sourceVersion?: number }
+export type DownloadLinePdf = (document: LinePdfAddress, signal?: AbortSignal) => Promise<{ blob: Blob; filename: string }>
 
 export class PdfRenderingError extends Error {}
 
@@ -42,5 +46,18 @@ export function createTechnicalPdfDownload(application: RunApplication, render: 
       await readSelected(source)
       return blob
     }, source => `teknisk-opplaering-${source.header.trainingDate}-${source.documentId}.pdf`,
+  )
+}
+
+export function createLinePdfDownload(application: RunApplication, render: RenderLinePdf): DownloadLinePdf {
+  const readSelected = (document: LinePdfAddress) =>
+    application.withOpenStorage(() => application.readLineSnapshot(document, document.sourceVersion, true))
+  return createDocumentPdfDownload(
+    readSelected, async (source, signal) => {
+      const blob = await render(source, signal)
+      signal?.throwIfAborted()
+      await readSelected(source)
+      return blob
+    }, source => `linjeopplaering-v${source.sourceVersion}-${source.documentId}.pdf`,
   )
 }

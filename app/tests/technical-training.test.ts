@@ -6,8 +6,8 @@ import { RunApplication } from '../src/application/run-application.ts'
 import { createTechnicalPdfDownload } from '../src/application/run-pdf.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
 import { createRun } from '../src/domain/run.ts'
-import { checkTechnicalTraining, technicalExportSource } from '../src/domain/technical-training.ts'
-import type { TechnicalCommand, TechnicalTraining } from '../src/domain/technical-training.ts'
+import { applyTechnicalCommand, checkTechnicalTraining, createTechnicalTraining, technicalExportSource } from '../src/domain/technical-training.ts'
+import type { ConfirmTechnicalTraining, CreateTechnicalTraining, TechnicalCommand, TechnicalTraining } from '../src/domain/technical-training.ts'
 
 const details = { instructorName: 'Øyvind Demo', busType: 'Volvo K1', trainingDate: '2028-02-29' }
 const person = { driverName: 'Åse Øvelø', employeeNumber: 'DEMO-32' }
@@ -321,4 +321,50 @@ test('schema 4 oppgraderer eksisterende sjåfør, profil og løpsdata uten å om
   }
   const created = await upgraded.executeTechnical(upgraded.newCreateTechnicalCommand(instructor, driver.id, details))
   assert.equal((await upgraded.read()).technical?.documentId, created.documentId)
+})
+
+test('schema 5 beholder aktivt teknisk dokument, frosset kilde og kvittering ved oppgradering til schema 6', async () => {
+  const id = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
+  const actors = { fadder: id(1), sjåfør: id(2), instruktør: id(3) }
+  const instructor = { role: 'instruktør' as const, id: actors.instruktør }
+  const driver = { id: id(4), name: person.driverName, employeeNumber: person.employeeNumber }
+  const document = { documentId: id(5), documentType: 'technical-training' as const }
+  const create: CreateTechnicalTraining = {
+    ...document, actor: instructor, driverRef: driver.id, commandId: id(6), expectedRevision: 0,
+    kind: 'create-technical-training', payload: details,
+  }
+  const draft = createTechnicalTraining(create, driver)
+  const reviewed = applyTechnicalCommand(draft, {
+    ...create, actor: { id: actors.sjåfør, role: 'sjåfør' }, commandId: id(7), kind: 'save-technical-training',
+    payload: { points: Object.fromEntries(draft.points.map(({ id }) => [id, { status: 'reviewed' }])) },
+  }, actors.sjåfør)
+  const confirm: ConfirmTechnicalTraining = {
+    actor: { id: instructor.id, role: instructor.role }, commandId: id(8), ...document, driverRef: driver.id, expectedRevision: 1,
+    kind: 'confirm-technical-training', payload: { confirmedAt: '2028-02-29T12:00:00.000Z', instructorName: details.instructorName },
+  }
+  const frozen = applyTechnicalCommand(reviewed, confirm, actors.sjåfør)
+  const receipt = { ...document, revision: frozen.revision }
+  const session = { actors, role: instructor.role, driverId: driver.id, document }
+  const factory = new IDBFactory()
+  const old = await openDatabase(factory, 5, db => {
+    const meta = db.createObjectStore('meta')
+    meta.add({ schemaVersion: 5 }, 'schema')
+    meta.add({ schemaVersion: 5, data: session }, 'session')
+    db.createObjectStore('runs').createIndex('firstDayId', 'data.firstDay.id', { unique: true })
+    db.createObjectStore('drivers').add({ schemaVersion: 5, data: driver }, driver.id)
+    db.createObjectStore('commands').add({ schemaVersion: 5, data: { fingerprint: JSON.stringify(confirm), receipt } }, confirm.commandId)
+    const technical = db.createObjectStore('technicalDocuments')
+    technical.createIndex('driverRef', 'data.driverRef')
+    technical.add({ schemaVersion: 5, data: frozen }, document.documentId)
+  })
+  old.close()
+  const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, () => crypto.randomUUID())
+  const view = await app.open()
+  assert.equal(SCHEMA_VERSION, 6)
+  assert.deepEqual(view.actor, instructor)
+  assert.equal(view.technical?.documentId, document.documentId)
+  assert.deepEqual(await app.readTechnicalSnapshot(document, true), frozen.snapshot)
+  assert.deepEqual(await editTechnicalRecord(factory, document.documentId), frozen)
+  assert.deepEqual(await app.executeTechnical(confirm), receipt)
+  assert.deepEqual(await app.readTechnicalSnapshot(document, true), frozen.snapshot)
 })

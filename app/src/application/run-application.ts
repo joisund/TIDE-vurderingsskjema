@@ -4,7 +4,7 @@ import type {
 } from '../domain/run.ts'
 import { dayDraft, dayFieldAccess, dayFields, validateDayDraftCommand } from '../domain/day-draft.ts'
 import type { DayChanges, SaveDayDraftCommand } from '../domain/day-draft.ts'
-import type { RunStore, Selection, WorkspaceState } from './run-store.ts'
+import type { LineRoleContext, RunStore, Selection, WorkspaceState } from './run-store.ts'
 import {
   baselineOf, firstDayCanDriveAfter, validateBaselineDraftCommand, validateConfirmBaselineCommand,
 } from '../domain/baseline.ts'
@@ -29,6 +29,8 @@ import type { CloseRunCommand, ConclusionDraft, ConclusionStatus, SaveConclusion
 import {
   checkTechnicalTraining, technicalDocumentType, technicalExportSource, validateTechnicalCommand,
 } from '../domain/technical-training.ts'
+import { lineDocumentType, lineExportSource, validateLineCommand } from '../domain/line-training.ts'
+import type { ConfirmLineTrainingEntries, CreateLineTraining, LineCommand, LineSelection, LineTraining, SaveLineTraining } from '../domain/line-training.ts'
 import type {
   ConfirmTechnicalTraining, CreateTechnicalTraining, SaveTechnicalTraining, TechnicalCommand, TechnicalCreateFields, TechnicalPoint, TechnicalSelection,
 } from '../domain/technical-training.ts'
@@ -154,6 +156,9 @@ function toView(state: WorkspaceState) {
         : technical.points.map<TechnicalPoint>(({ id, status, author, reason }) => ({ id, status, author, reason })),
       issues: technical.status === 'draft' ? checkTechnicalTraining(technical, state.technicalDriverActorId, technical.revision) : [],
     },
+    lineDocuments: state.lineDocuments,
+    lineProblem: state.lineProblem,
+    lineTraining: state.lineTraining && { ...state.lineTraining, driverActorId: state.technicalDriverActorId },
     selected: run && day && plan && {
       ...summary(run),
       ...historyDay(run, day, role, Boolean(closure)),
@@ -189,8 +194,9 @@ function toView(state: WorkspaceState) {
 export type WorkspaceView = ReturnType<typeof toView>
 export type DayView = NonNullable<WorkspaceView['selected']>
 export type TechnicalView = NonNullable<WorkspaceView['technical']>
+export type LineTrainingView = NonNullable<WorkspaceView['lineTraining']>
 
-function canonicalCommand(command: TechnicalCommand) {
+function canonicalCommand(command: TechnicalCommand | LineCommand) {
   return JSON.stringify(command, (_key, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)
 }
@@ -597,6 +603,53 @@ export class RunApplication {
     return technicalExportSource(await this.#store.readTechnical(selection, requireSelected))
   }
 
+  newCreateLineCommand(actor: Actor, driverRef: string): CreateLineTraining {
+    return {
+      kind: 'create-line-training', documentType: lineDocumentType, documentId: this.#newId(),
+      commandId: this.#newId(), actor: { ...actor }, driverRef, expectedRevision: 0, payload: {},
+    }
+  }
+
+  newLineEntryId() {
+    return this.#newId()
+  }
+
+  newSaveLineCommand(actor: Actor, document: Pick<LineTraining, keyof LineSelection | 'driverRef' | 'revision'>,
+    payload: Omit<SaveLineTraining['payload'], 'editedAt'>): SaveLineTraining {
+    return {
+      kind: 'save-line-training', documentType: document.documentType, documentId: document.documentId,
+      commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision,
+      payload: { ...payload, editedAt: new Date().toISOString() },
+    }
+  }
+
+  newConfirmLineCommand(actor: Actor, document: Pick<LineTraining, keyof LineSelection | 'driverRef' | 'revision'>,
+    entryIds: string[], instructorName: string): ConfirmLineTrainingEntries {
+    return {
+      kind: 'confirm-line-training-entries', documentType: document.documentType, documentId: document.documentId,
+      commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision,
+      payload: { entryIds: [...entryIds], instructorName, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  async executeLineTraining(command: LineCommand) {
+    validateLineCommand(command)
+    const snapshot = structuredClone(command)
+    return this.#store.executeLineTraining(snapshot, canonicalCommand(snapshot))
+  }
+
+  async selectLineTraining(selection: LineSelection) {
+    return toView(await this.#store.selectLineTraining(selection))
+  }
+
+  async readLineTraining(selection: LineSelection) {
+    return this.#store.readLineTraining(selection)
+  }
+
+  async readLineSnapshot(selection: LineSelection, sourceVersion?: number, requireSelected = false) {
+    return lineExportSource(await this.#store.readLineTraining(selection, requireSelected), sourceVersion)
+  }
+
   async read(selection?: Selection) {
     return toView(await this.#store.read(selection))
   }
@@ -613,7 +666,7 @@ export class RunApplication {
     return toView(await this.#store.selectDriver(driverId))
   }
 
-  async changeRole(role: Role, selection?: Selection | null) {
-    return toView(await this.#store.changeRole(role, selection))
+  async changeRole(role: Role, selection?: Selection | null, expectedLine?: LineRoleContext) {
+    return toView(await this.#store.changeRole(role, selection, expectedLine))
   }
 }

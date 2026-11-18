@@ -211,6 +211,18 @@ input, select {
 .baseline-confirm { margin-block: 16px; }
 .baseline-confirm .error-panel { margin-bottom: 12px; }
 
+.day-history li + li { margin-top: 12px; }
+.evaluation { margin-block: 20px; }
+.evaluation > p { margin-block: 8px; }
+.evaluation-fields {
+  min-width: 0;
+  margin: 18px 0;
+  padding: 10px 0 0;
+  border: 0;
+}
+.evaluation-fields legend, .evaluation-fields label { font-weight: 650; }
+.evaluation-fields label { display: block; }
+
 .issue-link {
   min-height: 44px;
   border: 0;
@@ -329,7 +341,7 @@ button.matrix-choice { cursor: pointer; }
 .assessment-dialog h2 + p, .assessment-dialog p + p { margin-top: 8px; }
 .assessment-dialog .actions { margin-top: 22px; }
 .assessment-dialog button { white-space: normal; overflow-wrap: anywhere; }
-.assessment-dialog textarea {
+.assessment-dialog textarea, .evaluation-fields textarea {
   width: 100%;
   min-height: 108px;
   margin: 8px 0 10px;
@@ -340,6 +352,7 @@ button.matrix-choice { cursor: pointer; }
   line-height: 1.5;
   resize: vertical;
 }
+.evaluation-fields textarea { display: block; font-size: 1rem; font-weight: 400; }
 .assessment-dialog textarea[aria-invalid='true'] { border: 2px solid var(--primary); }
 .dialog-context { font-size: .75rem; font-weight: 700; margin-top: 12px; }
 .dialog-criterion { font-size: .9375rem; font-weight: 650; margin-bottom: 12px; }

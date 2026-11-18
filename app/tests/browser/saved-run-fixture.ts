@@ -2,9 +2,10 @@ import type { Page } from '@playwright/test'
 import { confirmBaseline, updateBaselineDraft } from '../../src/domain/baseline.ts'
 import type { Actor, Run } from '../../src/domain/run.ts'
 
-export function lockedRun(run: Run): Run {
+export function lockedRun(run: Run, notRelevantId?: string): Run {
   const actor: Actor = { role: 'sjåfør', id: crypto.randomUUID() }
-  const changes = Object.fromEntries(run.content.criteria.map(({ id }) => [id, { value: 'ok' as const, reason: null }]))
+  const changes = Object.fromEntries(run.content.criteria.map(({ id }) => [id, id === notRelevantId
+    ? { value: 'not_relevant' as const, reason: 'Ingen rygging' } : { value: 'ok' as const, reason: null }]))
   const answered = updateBaselineDraft(run, {
     commandId: crypto.randomUUID(), runId: run.id, actor, expectedRevision: run.revision, payload: { changes },
   })

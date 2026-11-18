@@ -1,4 +1,5 @@
 import type { Baseline, DriverAfterAnswer } from './baseline.ts'
+import type { EvaluationDraft, DriverEvaluation, RunPlan } from './driver-day.ts'
 
 export type Role = 'fadder' | 'sjåfør'
 export type Actor = { id: string; role: Role }
@@ -37,9 +38,13 @@ export type Day = {
   driverConfirmation?: Confirmation
   mentorConfirmation?: Confirmation
   session?: SessionFields
+  driverAfterAnswers?: DriverAfterAnswer[]
+  driverAfterReasonDrafts?: Baseline['reasonDrafts']
+  evaluationDraft?: EvaluationDraft
+  driverEvaluation?: DriverEvaluation
 }
 
-export type FirstDay = Day & { number: 1; driverAfterAnswers?: DriverAfterAnswer[] }
+export type FirstDay = Day & { number: 1 }
 
 export type Run = {
   id: string
@@ -47,6 +52,7 @@ export type Run = {
   lifecycle: 'open' | 'closed'
   driver: { id: string; name: string; employeeNumber: string }
   initialLastDay: StartPlan
+  plan?: RunPlan
   firstDay: FirstDay
   laterDays?: (Day & { number: 2 | 3 | 4 | 5 })[]
   baseline?: Baseline
@@ -65,7 +71,7 @@ export type CreateRunCommand = {
 export type RunReceipt = { runId: string; dayId: string; revision: number }
 
 export type ErrorCode =
-  | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale'
+  | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale' | 'baseline_required'
   | 'command_conflict' | 'run_missing' | 'day_missing' | 'locked' | 'storage_open' | 'storage_read'
   | 'storage_write' | 'storage_blocked' | 'schema_changed'
   | 'unsupported_schema' | 'resource_load'
@@ -204,6 +210,13 @@ export function runDays(run: Run): Day[] {
 
 export function findDay(run: Run, dayId: string): Day | undefined {
   return runDays(run).find(day => day.id === dayId)
+}
+
+export function replaceDay(run: Run, day: Day): Run {
+  const revision = run.revision + 1
+  if (day.number === 1) return { ...run, revision, firstDay: { ...day, number: 1 } }
+  const laterDays = run.laterDays?.map(item => item.id === day.id ? { ...day, number: item.number } : item)
+  return { ...run, revision, laterDays }
 }
 
 export function createRun(command: CreateRunCommand, content: ContentSnapshot): Run {

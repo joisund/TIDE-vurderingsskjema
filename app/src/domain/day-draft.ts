@@ -1,4 +1,4 @@
-import { AppError, dayLocks, findDay, hasText, isCalendarDate, isId, runDays } from './run.ts'
+import { AppError, dayLocks, findDay, hasText, isCalendarDate, isId, replaceDay, runDays } from './run.ts'
 import type { Actor, Day, FieldErrors, Role, Run, SessionFields } from './run.ts'
 
 export type DayDraft = SessionFields & {
@@ -127,8 +127,5 @@ export function updateDayDraft(run: Run, command: SaveDayDraftCommand): Run {
       updated.mentorNameDraft = mentorName
     }
   }
-  const revision = run.revision + 1
-  if (day.number === 1) return { ...run, revision, firstDay: { ...updated, number: 1 } }
-  const laterDays = run.laterDays?.map(item => item.id === day.id ? { ...updated, number: item.number } : item)
-  return { ...run, revision, laterDays }
+  return replaceDay(run, updated)
 }

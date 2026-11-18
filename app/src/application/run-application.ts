@@ -1,5 +1,5 @@
 import { AppError, createRun, dayLocks, findDay, runDays, validateContent, validateCreateIds } from '../domain/run.ts'
-import type { Actor, ContentSnapshot, CreateRunCommand, CreateRunFields, Role, Run, RunReceipt } from '../domain/run.ts'
+import type { Actor, ContentSnapshot, CreateRunCommand, CreateRunFields, Day, Role, Run, RunReceipt } from '../domain/run.ts'
 import { dayDraft, dayFieldAccess, dayFields, validateDayDraftCommand } from '../domain/day-draft.ts'
 import type { DayChanges, SaveDayDraftCommand } from '../domain/day-draft.ts'
 import type { RunStore, Selection, WorkspaceState } from './run-store.ts'
@@ -7,6 +7,11 @@ import {
   baselineOf, firstDayCanDriveAfter, validateBaselineDraftCommand, validateConfirmBaselineCommand,
 } from '../domain/baseline.ts'
 import type { BaselineChanges, ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../domain/baseline.ts'
+import {
+  currentPlan, driverAfterOf, evaluationFields, offersEvaluation, snapshotEvaluation,
+  validateConfirmDriverDayCommand, validateDriverDayDraftCommand,
+} from '../domain/driver-day.ts'
+import type { ConfirmDriverDayCommand, DriverDayChanges, SaveDriverDayDraftCommand } from '../domain/driver-day.ts'
 
 function summary(run: Run) {
   const identity = run.firstDay.driverIdentity ?? run.driver
@@ -35,15 +40,34 @@ function baselineView(run: Run, role: Role) {
   }
 }
 
+function driverAfterView(run: Run, day: Day, role: Role) {
+  if (!firstDayCanDriveAfter(run)) return undefined
+  const { answers, reasonDrafts } = driverAfterOf(run, day)
+  const editable = role === 'sjåfør' && !dayLocks(run, day).dayLocked && !day.driverConfirmation
+  const plan = currentPlan(run)
+  return {
+    answers,
+    reasonDrafts: editable ? reasonDrafts : {},
+    editable,
+    confirmation: day.driverConfirmation,
+    criteria: run.content.criteria,
+    fields: dayDraft(run, day),
+    evaluationOffered: !day.driverConfirmation && offersEvaluation(plan, day),
+    evaluationDraft: day.evaluationDraft,
+    evaluation: day.driverEvaluation,
+  }
+}
+
 function toView(state: WorkspaceState) {
   const selection = state.session.selection
   const run = state.runs.find(item => item.id === selection?.runId)
   const day = run && selection && findDay(run, selection.dayId)
+  const plan = run && currentPlan(run)
   if (selection && (!run || !day)) throw new AppError('storage_read')
   return {
     actor: { ...state.session.actor },
     runs: state.runs.map(summary),
-    selected: run && day && {
+    selected: run && day && plan && {
       ...summary(run),
       dayId: day.id,
       day: day.number,
@@ -52,8 +76,11 @@ function toView(state: WorkspaceState) {
       access: dayFieldAccess(run, day, state.session.actor.role),
       ...dayLocks(run, day),
       baseline: baselineView(run, state.session.actor.role),
-      plannedLastDay: run.initialLastDay,
-      plannedLastDate: runDays(run).find(item => item.number === run.initialLastDay)?.date,
+      driverAfter: driverAfterView(run, day, state.session.actor.role),
+      planRevision: plan.revision,
+      plannedLastDay: plan.lastDay,
+      plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
+      days: runDays(run).map(({ id, number, date, driverConfirmation }) => ({ id, number, date, driverConfirmation })),
     },
   }
 }
@@ -81,6 +108,32 @@ export function confirmationView(day: DayView, command: ConfirmBaselineCommand, 
       },
     },
   }
+}
+
+export function driverDayConfirmationView(day: DayView, command: ConfirmDriverDayCommand, receipt: RunReceipt): DayView {
+  if (!day.driverAfter) throw new AppError('storage_read')
+  const confirmation = { actor: { ...command.actor, name: day.fields.driverName }, confirmedAt: command.payload.confirmedAt }
+  const { evaluationOffered, evaluationDraft } = day.driverAfter
+  return {
+    ...day,
+    revision: receipt.revision,
+    identityLocked: true,
+    access: { ...day.access, driverName: 'locked', employeeNumber: 'locked', date: 'locked' },
+    days: day.days.map(item => item.id === day.dayId ? { ...item, driverConfirmation: confirmation } : item),
+    driverAfter: {
+      ...day.driverAfter,
+      editable: false, confirmation, reasonDrafts: {}, evaluationOffered: false, evaluationDraft: undefined,
+      evaluation: snapshotEvaluation(day.dayId, day.fields.date, day.planRevision, evaluationOffered, evaluationDraft),
+    },
+  }
+}
+
+function orderedChanges(changes: BaselineChanges) {
+  return Object.fromEntries(Object.entries(changes).sort(([a], [b]) => a.localeCompare(b)).map(([id, row]) => [id, { ...row }]))
+}
+
+function answerFingerprint(changes: BaselineChanges) {
+  return Object.entries(changes).map(([id, row]) => [id, row.value, row.reason, row.reasonDraft])
 }
 
 function fingerprint({ actor, expectedRevision, runId, payload }: CreateRunCommand): string {
@@ -166,13 +219,12 @@ export class RunApplication {
 
   async executeBaselineDraft(command: SaveBaselineDraftCommand) {
     validateBaselineDraftCommand(command)
-    const changes = Object.fromEntries(Object.entries(command.payload.changes).sort(([a], [b]) => a.localeCompare(b))
-      .map(([id, row]) => [id, { ...row }]))
+    const changes = orderedChanges(command.payload.changes)
     const snapshot = { ...command, actor: { ...command.actor }, payload: { changes } }
     const { runId, actor, expectedRevision } = snapshot
     const fingerprint = JSON.stringify([
       'save-baseline-draft', runId, actor.id, actor.role, expectedRevision,
-      Object.entries(changes).map(([id, row]) => [id, row.value, row.reason, row.reasonDraft]),
+      answerFingerprint(changes),
     ])
     return this.#store.saveBaselineDraft(snapshot, fingerprint)
   }
@@ -190,6 +242,48 @@ export class RunApplication {
     const { runId, actor, expectedRevision, payload } = snapshot
     const fingerprint = JSON.stringify(['confirm-baseline', runId, actor.id, actor.role, expectedRevision, payload.confirmedAt])
     return this.#store.confirmBaseline(snapshot, fingerprint)
+  }
+
+  newDriverDayDraftCommand(actor: Actor, day: DayView, changes: DriverDayChanges): SaveDriverDayDraftCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, planRevision: day.planRevision, changes },
+    }
+  }
+
+  async executeDriverDayDraft(command: SaveDriverDayDraftCommand) {
+    validateDriverDayDraftCommand(command)
+    const { answers, evaluation } = command.payload.changes
+    const changes = {
+      answers: answers && orderedChanges(answers),
+      evaluation: evaluation && { ...evaluation, texts: evaluation.texts && { ...evaluation.texts } },
+    }
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload, changes } }
+    const { runId, actor, expectedRevision, payload } = snapshot
+    const fingerprint = JSON.stringify([
+      'save-driver-day-draft', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.planRevision,
+      changes.answers && answerFingerprint(changes.answers),
+      evaluation && [evaluation.decision, evaluation.previousOfferRevision,
+        evaluationFields.map(field => evaluation.texts?.[field]), ...(evaluation.markOffer ? [true] : [])],
+    ])
+    return this.#store.saveDriverDayDraft(snapshot, fingerprint)
+  }
+
+  newConfirmDriverDayCommand(actor: Actor, day: DayView): ConfirmDriverDayCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, planRevision: day.planRevision, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  async executeConfirmDriverDay(command: ConfirmDriverDayCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    validateConfirmDriverDayCommand(snapshot)
+    const { runId, actor, expectedRevision, payload } = snapshot
+    const fingerprint = JSON.stringify([
+      'confirm-driver-day', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.planRevision, payload.confirmedAt,
+    ])
+    return this.#store.confirmDriverDay(snapshot, fingerprint)
   }
 
   async read(selection?: Selection) {

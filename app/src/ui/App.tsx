@@ -6,12 +6,12 @@ import { AppError, validateCreateRun } from '../domain/run.ts'
 import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
 import { CreateRunForm } from './CreateRunForm.tsx'
 import { CalendarDate } from './CalendarDate.tsx'
-import { BaselineForm } from './BaselineForm.tsx'
+import { AssessmentForm } from './AssessmentForm.tsx'
 import { DayDraftForm } from './DayDraftForm.tsx'
 import type { DayDraftHandle } from './DayDraftForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 
-type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day' | 'baseline'
+type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day' | 'baseline' | 'after'
 type Props = {
   application: RunApplication
   logo: string
@@ -31,6 +31,7 @@ const headings: Record<Screen, string> = {
   create: 'Opprett løp',
   day: 'Dagsoversikt',
   baseline: 'Førvurdering',
+  after: 'Dagens ettervurdering',
 }
 
 export function App({ application, logo, prepare, requestPersistence, report }: Props) {
@@ -56,7 +57,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const focusHeading = useRef(false)
   const persistenceRequested = useRef(false)
   const initialization = useRef<Promise<WorkspaceView>>(undefined)
-  const selected = screen === 'day' || screen === 'baseline' ? view?.selected : undefined
+  const selected = screen === 'day' || screen === 'baseline' || screen === 'after' ? view?.selected : undefined
 
   const accept = useCallback((data: WorkspaceView) => {
     setView(data)
@@ -188,11 +189,11 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  function openRun(id: string) {
+  function openRun(id: string, dayId?: string) {
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        setView(await application.withOpenStorage(() => application.select(id)))
+        setView(await application.withOpenStorage(() => application.select(id, dayId)))
         setStorageStatus('')
         navigate('day')
       } catch (error) {
@@ -202,17 +203,21 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  function showAssessmentScreen(next: 'day' | 'baseline', field?: DayField) {
+  function showAssessmentScreen(next: 'day' | 'baseline' | 'after', field?: DayField) {
     if (!selected) return
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        const dayId = field ? selected.baseline.firstDayId : selected.dayId
+        const dayId = field && screen === 'baseline' ? selected.baseline.firstDayId : selected.dayId
         const latest = await application.withOpenStorage(() => field
           ? application.select(selected.id, dayId)
           : application.read({ runId: selected.id, dayId }))
         if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
         else setView(latest)
+        if (next === 'after' && !latest.selected?.driverAfter) {
+          setNavigationError(explain(new AppError('baseline_required')))
+          return
+        }
         focusDayField.current = field
         setFieldToFix(field)
         navigate(next)
@@ -266,6 +271,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
         selected: {
           ...saved,
           plannedLastDate: saved.day === saved.plannedLastDay ? saved.fields.date : saved.plannedLastDate,
+          days: saved.days.map(day => day.id === saved.dayId ? { ...day, date: saved.fields.date } : day),
         },
       }
     })
@@ -439,6 +445,31 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('baseline')}>Åpne førvurderingen</button>
             </section>
+            <section className="baseline-entry" aria-labelledby="driver-after-entry-heading">
+              <h2 id="driver-after-entry-heading">Dagens ettervurdering</h2>
+              {selected.driverAfter ? (
+                <>
+                  <p>{selected.driverAfter.confirmation ? 'Sjåførens ettervurdering er låst' : 'Sjåførens ettervurdering er ikke bekreftet'}</p>
+                  <button type="button" className="button secondary" aria-disabled={busy}
+                    onClick={() => showAssessmentScreen('after')}>Åpne dagens ettervurdering</button>
+                </>
+              ) : <p>Ettervurderingen åpner når førvurderingen er bekreftet.</p>}
+            </section>
+            {(selected.days.length > 1 || selected.days.some(day => day.driverConfirmation)) && (
+              <section className="baseline-entry" aria-labelledby="day-history-heading">
+                <h2 id="day-history-heading">Registrerte dager</h2>
+                <ul className="day-history">
+                  {selected.days.map(day => (
+                    <li key={day.id}>
+                      <p>Dag {day.number} · <CalendarDate value={day.date} /></p>
+                      {day.driverConfirmation && <p>Ettervurdering bekreftet av {day.driverConfirmation.actor.name}, sjåfør.</p>}
+                      {day.id !== selected.dayId && <button type="button" className="button secondary" aria-disabled={busy}
+                        onClick={() => openRun(selected.id, day.id)}>Åpne dag {day.number}</button>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
               initial={selected} actor={view.actor} application={application} report={report}
               onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} fieldToFix={fieldToFix} />
@@ -447,9 +478,10 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
             </div>
           </>
         )}
-        {screen === 'baseline' && selected && view && (
+        {(screen === 'baseline' || (screen === 'after' && selected?.driverAfter)) && selected && view && (
           <>
-            <BaselineForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
+            <AssessmentForm key={`${screen}/${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
+              phase={screen === 'baseline' ? 'before' : 'driver_after'}
               initial={selected} actor={view.actor} application={application} report={report}
               onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy}
               onConfirmIssue={setNavigationError} onDayField={field => showAssessmentScreen('day', field)} />

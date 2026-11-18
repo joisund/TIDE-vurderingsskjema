@@ -10,6 +10,7 @@ const messages: Record<ErrorCode, string> = {
   command_conflict: 'Opprettingsforsøket samsvarer ikke med det tidligere forsøket. Gå til løpsoversikten og sjekk om løpet allerede er lagret.',
   run_missing: 'Det valgte løpet kunne ikke finnes. Last inn løpsoversikten på nytt.',
   day_missing: 'Den valgte dagen kunne ikke finnes i løpet.',
+  baseline_required: 'Ettervurderingen åpner når førvurderingen er bekreftet.',
   locked: 'Feltet er låst og kan ikke endres.',
   storage_open: 'Det lokale lageret kan ikke åpnes. Sjekk at nettleseren tillater lagring for dette nettstedet, og prøv igjen.',
   storage_read: 'Løpsopplysningene kunne ikke leses fra det lokale lageret. Prøv igjen.',

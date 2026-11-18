@@ -1,16 +1,17 @@
 import { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import type { FormEvent, ReactNode, Ref, RefObject } from 'react'
+import type { FormEvent, Ref } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import { confirmationView, driverDayConfirmationView } from '../application/run-application.ts'
-import { answerValues, checkBaselineAnswers } from '../domain/baseline.ts'
-import type { BaselineDraftRow, ConfirmBaselineCommand } from '../domain/baseline.ts'
+import { checkBaselineAnswers } from '../domain/baseline.ts'
+import type { ConfirmBaselineCommand } from '../domain/baseline.ts'
 import { checkDayFields } from '../domain/day-draft.ts'
 import type { DayField } from '../domain/day-draft.ts'
 import { evaluationFields } from '../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, EvaluationField, EvaluationTexts } from '../domain/driver-day.ts'
 import { reasonRequirement, validateReason } from '../domain/reason.ts'
-import { criterionIds } from '../domain/run.ts'
 import type { Actor, Criterion, RunReceipt } from '../domain/run.ts'
+import { AssessmentMatrix, Modal } from './AssessmentMatrix.tsx'
+import { answerText, focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
 import { assessmentOf, evaluationDecisionOf, useAssessmentDraft } from './use-assessment-draft.ts'
@@ -30,9 +31,6 @@ type Props = {
   navigating: boolean
 }
 
-const answerLabels = {
-  ok: 'OK', needs_improvement: 'Kan bli bedre', not_relevant: 'Ikke relevant',
-} as const
 const confirmationDate = new Intl.DateTimeFormat('nb-NO', {
   dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Oslo',
 })
@@ -68,88 +66,9 @@ function EvaluationFields({ texts, update }: { texts: EvaluationTexts; update?: 
   )
 }
 
-const groups = [
-  ['Sjåfør', 0, 4],
-  ['Buss', 4, 11],
-  ['Trafikk / kjøreteknikk · Sjåfør', 11, 14],
-  ['Trafikk / kjøreteknikk · Samhandling', 14, 18],
-  ['Trafikk / kjøreteknikk · Optimal kjøreteknikk', 18, 22],
-] as const
-
-function groupedCriteria(criteria: readonly Criterion[]) {
-  const sections: { name: string; rows: { criterion: Criterion; number: number }[] }[] = []
-  for (const criterion of criteria) {
-    const index = criterionIds.indexOf(criterion.id)
-    const [name] = groups.find(([, from, to]) => index >= from && index < to)!
-    if (sections.at(-1)?.name !== name) sections.push({ name, rows: [] })
-    sections.at(-1)!.rows.push({ criterion, number: index + 1 })
-  }
-  return sections
-}
-
 type Dialog =
   | { kind: 'help' | 'reason'; criterion: Criterion; trigger: HTMLElement }
   | { kind: 'confirm'; snapshot: DayView; trigger: HTMLElement }
-
-function answerText(row: Pick<BaselineDraftRow, 'value'>) {
-  return row.value === null ? 'Ubesvart' : `Valgt · ${answerLabels[row.value]}`
-}
-
-function keepFocusVisible(target: HTMLElement, header: HTMLElement | null) {
-  if (!target.isConnected || document.activeElement !== target) return
-  const top = Math.max(0, header?.getBoundingClientRect().bottom ?? 0)
-  const bounds = target.getBoundingClientRect()
-  if (bounds.top < top + 8 || bounds.bottom > window.innerHeight - 8) {
-    window.scrollBy(0, bounds.top - (header?.offsetHeight ?? 0) - 10)
-  }
-}
-
-function Modal({ title, trigger, fallbackFocus, dismiss, blocking, help, children }: {
-  title: string
-  trigger: HTMLElement
-  fallbackFocus: RefObject<HTMLHeadingElement | null>
-  dismiss: () => void
-  blocking?: boolean
-  help?: boolean
-  children: ReactNode
-}) {
-  const dialog = useRef<HTMLDialogElement>(null)
-  const heading = useRef<HTMLHeadingElement>(null)
-  useLayoutEffect(() => {
-    const element = dialog.current
-    const viewport = window.visualViewport
-    const fitViewport = () => {
-      if (!element || !viewport) return
-      element.style.setProperty('--dialog-center', `${viewport.offsetTop + viewport.height / 2}px`)
-      element.style.setProperty('--dialog-view-height', `${viewport.height}px`)
-    }
-    fitViewport()
-    viewport?.addEventListener('resize', fitViewport)
-    viewport?.addEventListener('scroll', fitViewport)
-    element?.showModal()
-    heading.current?.focus()
-    return () => {
-      viewport?.removeEventListener('resize', fitViewport)
-      viewport?.removeEventListener('scroll', fitViewport)
-      element?.close()
-      // Konfliktoverskriften kan monteres mens dialogen står åpen.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      const target = trigger.isConnected ? trigger : fallbackFocus.current
-      target?.focus()
-    }
-  }, [trigger, fallbackFocus])
-
-  return (
-    <dialog ref={dialog} className={`assessment-dialog${help ? ' help-dialog' : ''}`}
-      aria-labelledby="assessment-dialog-title" onCancel={event => {
-        event.preventDefault()
-        if (!blocking) dismiss()
-      }}>
-      <h2 id="assessment-dialog-title" ref={heading} tabIndex={-1}>{title}</h2>
-      {children}
-    </dialog>
-  )
-}
 
 export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ...options }: Props) {
   const editor = useAssessmentDraft(options)
@@ -173,14 +92,11 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
   const confirmationAttempt = useRef<ConfirmBaselineCommand | ConfirmDriverDayCommand>(undefined)
   const unresolved = useRef<DayView>(undefined)
   const verifiedAbort = useRef(false)
-  const matrix = useRef<HTMLDivElement>(null)
-  const columnHeadings = useRef<HTMLDivElement>(null)
   const missingHeading = useRef<HTMLHeadingElement>(null)
   const evaluationHeading = useRef<HTMLHeadingElement>(null)
   const conflictHeading = useRef<HTMLHeadingElement>(null)
   const lockedStatus = useRef<HTMLParagraphElement>(null)
   const reasonField = useRef<HTMLTextAreaElement>(null)
-  const pointerFocus = useRef(false)
   const canEdit = assessment.editable && !conflict
   const blockEdits = checking || navigating || hasUnresolvedConfirmation
   const answerIssues = checkBaselineAnswers(assessment.answers.map(answer => ({ ...answer, ...rows[answer.criterionId] })))
@@ -215,17 +131,6 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
     setRequestedFocus({ target: 'missing' })
   }
 
-  useLayoutEffect(() => {
-    const header = columnHeadings.current
-    const container = matrix.current
-    if (!header || !container) return
-    const update = () => container.style.setProperty('--matrix-heading-height', `${header.offsetHeight}px`)
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(header)
-    return () => observer.disconnect()
-  }, [showEvaluation])
-
   useImperativeHandle(ref, () => ({ flush: () => confirmingRef.current || unresolved.current ? Promise.resolve(false) : editor.flush() }))
 
   function setUnresolvedConfirmation(snapshot?: DayView) {
@@ -241,12 +146,6 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
     setDialog(undefined)
     setReasonError(false)
     if (!unresolved.current) setConfirmationError('')
-  }
-
-  function focusAnswer(criterionId: string) {
-    const target = document.getElementById(`answer-${criterionId}-ok`)
-    target?.focus({ preventScroll: true })
-    if (target) keepFocusVisible(target, columnHeadings.current)
   }
 
   function checkCompletion(trigger: HTMLElement) {
@@ -565,82 +464,26 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
               <li key={field}><button type="button" className="issue-link" onClick={() => onDayField(field)}>Dag {dayNumber} · {message}</button></li>
             ))}
             {assessment.criteria.filter(({ id }) => answerIssues[id]).map(({ id, title }) => (
-              <li key={id}><button type="button" className="issue-link" onClick={() => focusAnswer(id)}>
+              <li key={id}><button type="button" className="issue-link" onClick={() => focusMatrixField('answer-' + id + '-ok')}>
                 {title} · {answerIssues[id]}
               </button></li>
             ))}
           </ul>
         </section>
       )}
-      {!showEvaluation && <div className="assessment-matrix" ref={matrix}
-        onPointerDownCapture={() => {
-          pointerFocus.current = true
-          requestAnimationFrame(() => { pointerFocus.current = false })
+      {!showEvaluation && <AssessmentMatrix criteria={assessment.criteria} answers={assessment.answers}
+        rows={rows} issues={showProblems ? answerIssues : {}} editable={canEdit} blocked={blockEdits}
+        helpDisabled={checking} context={'Sjåfør · ' + phaseName + (after ? ' · Dag ' + dayNumber : '')}
+        onHelp={(criterion, trigger) => {
+          if (!confirmingRef.current) setDialog({ kind: 'help', criterion, trigger })
         }}
-        onFocus={event => {
-          const target = event.target
-          if (!pointerFocus.current && target instanceof HTMLElement) {
-            keepFocusVisible(target, columnHeadings.current)
-            requestAnimationFrame(() => keepFocusVisible(target, columnHeadings.current))
-          }
-        }}>
-        <div className="matrix-headings" ref={columnHeadings}>
-          <span>Vurderingspunkt</span>
-          <span>OK</span>
-          <span>Kan bli bedre</span>
-          <span>Ikke relevant</span>
-        </div>
-        {groupedCriteria(assessment.criteria).map(({ name, rows: sectionRows }) => {
-          const headingId = `baseline-category-${sectionRows[0].criterion.id}`
-          return <section key={headingId} aria-labelledby={headingId}>
-            <h2 id={headingId} className="category">{name}</h2>
-            {sectionRows.map(({ criterion, number }) => {
-              const { id, title } = criterion
-              const row = rows[id]
-              const answer = assessment.answers.find(item => item.criterionId === id)
-              const inherited = answer && 'inheritedFrom' in answer && Boolean(answer.inheritedFrom)
-              const canEditRow = canEdit && !inherited
-              const issue = canEditRow && showProblems && answerIssues[id]
-              return (
-                <div className="matrix-row" key={id} role="group" aria-labelledby={`title-${id}`}>
-                  <div className="matrix-criterion">
-                    <div className="criterion-number">
-                      <span aria-hidden="true">{number}</span>
-                      <button type="button" className="help-trigger" aria-label={`Hjelp om ${title}`} aria-disabled={checking}
-                        onClick={event => {
-                          if (!confirmingRef.current) setDialog({ kind: 'help', criterion, trigger: event.currentTarget })
-                        }}>?</button>
-                    </div>
-                    <p id={`title-${id}`}>{title}</p>
-                    <p className="matrix-state">{answerText(row)}</p>
-                    {inherited && <p className="matrix-state">Låst · Videreført fra førvurderingen</p>}
-                    {issue && <p className="field-error" id={`baseline-issue-${id}`}>{issue}</p>}
-                  </div>
-                  {answerValues.map(value => canEditRow ? (
-                    <button key={value} id={`answer-${id}-${value}`} type="button" className="matrix-choice"
-                      aria-label={`${answerLabels[value]} · ${title} · Sjåfør · ${phaseName}${after ? ` · Dag ${dayNumber}` : ''}`}
-                      aria-pressed={row.value === value}
-                      aria-describedby={issue ? `baseline-issue-${id}` : undefined}
-                      aria-invalid={issue ? true : undefined} aria-disabled={blockEdits}
-                      onClick={event => {
-                        if (blockEdits || confirmingRef.current) return
-                        if (value === 'not_relevant') {
-                          setReasonError(false)
-                          setDialog({ kind: 'reason', criterion, trigger: event.currentTarget })
-                        } else editor.update(id, { value, reason: null })
-                      }}><span className="choice-dot" aria-hidden="true" /></button>
-                  ) : (
-                    <span key={value} className="matrix-choice choice-read-only" aria-hidden="true">
-                      <span className={`choice-dot${row.value === value ? ' choice-selected' : ''}`} />
-                    </span>
-                  ))}
-                  {row.reason && <p className="matrix-reason">Begrunnelse · {row.reason}</p>}
-                </div>
-              )
-            })}
-          </section>
-        })}
-      </div>}
+        onChoice={(criterion, value, trigger) => {
+          if (blockEdits || confirmingRef.current) return
+          if (value === 'not_relevant') {
+            setReasonError(false)
+            setDialog({ kind: 'reason', criterion, trigger })
+          } else editor.update(criterion.id, { value, reason: null })
+        }} />}
       {after && (showEvaluation || (!assessment.editable && evaluation && evaluation.state !== 'not_offered')
         || (!assessment.editable && savedDecision) || (!showEvaluation && hasTexts && (!evaluationOffered || issues > 0 || !assessment.editable))) && (
         <section className="evaluation" aria-labelledby="evaluation-heading">

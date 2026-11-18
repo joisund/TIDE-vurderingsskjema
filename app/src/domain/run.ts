@@ -1,5 +1,6 @@
 import type { Baseline, DriverAfterAnswer } from './baseline.ts'
 import type { EvaluationDraft, DriverEvaluation, RunPlan } from './driver-day.ts'
+import type { MentorDay } from './mentor-day.ts'
 
 export type Role = 'fadder' | 'sjåfør'
 export type Actor = { id: string; role: Role }
@@ -42,6 +43,7 @@ export type Day = {
   driverAfterReasonDrafts?: Baseline['reasonDrafts']
   evaluationDraft?: EvaluationDraft
   driverEvaluation?: DriverEvaluation
+  mentorDay?: MentorDay
 }
 
 export type FirstDay = Day & { number: 1 }

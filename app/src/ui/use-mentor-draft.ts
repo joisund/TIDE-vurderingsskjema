@@ -1,0 +1,340 @@
+import { useRef, useState } from 'react'
+import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
+import type { BaselineDraftRow } from '../domain/baseline.ts'
+import { applyMentorChanges } from '../domain/mentor-day.ts'
+import type { MentorDayChanges, RelevanceReview, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
+import { AppError } from '../domain/run.ts'
+import type { Actor } from '../domain/run.ts'
+import { useAutosaveDeadline } from './use-autosave-deadline.ts'
+
+export type MentorView = DayView & { mentorDay: NonNullable<DayView['mentorDay']> }
+type Stored = WorkspaceView & { selected: DayView }
+type Problem = { error: unknown; conflict?: { latest?: Stored; readError?: unknown } }
+// Null bevarer en uttrykkelig tømming av råteksten frem til kvittering.
+type Row = Omit<BaselineDraftRow, 'reasonDraft'> & { reasonDraft?: string | null }
+type ReviewAttempt = { id: string; input: ReviewInput; command?: ReviewRelevanceCommand }
+type Draft = {
+  saved: MentorView
+  rows: Record<string, Row>
+  comments: Record<string, string>
+  rejectionDrafts: Record<string, string>
+  writing: boolean
+  problem?: Problem
+}
+type Options = {
+  initial: MentorView
+  actor: Actor
+  application: RunApplication
+  report: (error: unknown) => void
+  onSaved: (day: DayView) => void
+  onAdopt: (view: WorkspaceView) => void
+}
+
+function draftOf(saved: MentorView): Draft {
+  const { answers, reasonDrafts, comments, rejectionDrafts } = saved.mentorDay
+  return {
+    saved, writing: false,
+    rows: Object.fromEntries(answers.map(({ criterionId, value, reason }) => [
+      criterionId, { value, reason, reasonDraft: reasonDrafts[criterionId] },
+    ])),
+    comments: Object.fromEntries(Object.entries(comments).map(([id, comment]) => [id, comment?.text ?? ''])),
+    rejectionDrafts: Object.fromEntries(Object.entries(rejectionDrafts).map(([id, text]) => [id, text ?? ''])),
+  }
+}
+
+function changedText(local: Draft['comments'], saved: Draft['comments']) {
+  return Object.fromEntries(Object.entries(local).filter(([id, text]) => text !== (saved[id] ?? '')))
+}
+
+function changesSince(draft: Draft): MentorDayChanges {
+  const saved = draftOf(draft.saved)
+  const answers = Object.fromEntries(Object.entries(draft.rows).filter(([id, row]) => {
+    const previous = saved.rows[id]
+    return row.value !== previous.value || row.reason !== previous.reason || row.reasonDraft !== previous.reasonDraft
+  }).map(([id, row]) => [id, { ...row, reasonDraft: row.reasonDraft ?? undefined }]))
+  const comments = changedText(draft.comments, saved.comments)
+  const rejectionDrafts = Object.fromEntries(Object.entries(draft.rejectionDrafts)
+    .filter(([id, text]) => text !== saved.rejectionDrafts[id]))
+  return {
+    ...(Object.keys(answers).length && { answers }),
+    ...(Object.keys(comments).length && { comments }),
+    ...(Object.keys(rejectionDrafts).length && { rejectionDrafts }),
+  }
+}
+
+export function useMentorDraft({ initial, actor, application, report, onSaved, onAdopt }: Options) {
+  const [draft, setDraft] = useState(() => draftOf(initial))
+  const [notice, setNotice] = useState('')
+  const current = useRef(draft)
+  const deadline = useAutosaveDeadline()
+  const active = useRef<Promise<boolean>>(undefined)
+  const draftAttempt = useRef<SaveMentorDayCommand>(undefined)
+  const reviewAttempt = useRef<ReviewAttempt>(undefined)
+  const [reviewing, setReviewing] = useState(false)
+  const processing = useRef(false)
+  const selection = { runId: initial.id, dayId: initial.dayId }
+
+  function publish(next: Draft) {
+    current.current = next
+    setDraft(next)
+  }
+
+  function schedule() {
+    deadline.schedule(() => { void flush(false) })
+  }
+
+  function updateRows(id: string, patch: Partial<Row>) {
+    update({ rows: { ...current.current.rows, [id]: { ...current.current.rows[id], ...patch } } })
+  }
+
+  function updateText(field: 'comments' | 'rejectionDrafts', id: string, text: string) {
+    update({ [field]: { ...current.current[field], [id]: text } })
+  }
+
+  function update(patch: Partial<Pick<Draft, 'rows' | 'comments' | 'rejectionDrafts'>>) {
+    const state = current.current
+    if (!state.saved.mentorDay.editable || processing.current || state.problem?.conflict || reviewAttempt.current) return
+    publish({ ...state, ...patch })
+    if (!state.problem) schedule()
+  }
+
+  function matchesActor(stored: WorkspaceView) {
+    return stored.actor.id === actor.id && stored.actor.role === actor.role
+  }
+
+  async function readStored(restoreRole = false): Promise<NonNullable<Problem['conflict']>> {
+    try {
+      const latest = await application.withOpenStorage(() => restoreRole
+        ? application.changeRole(actor.role, selection)
+        : application.read(selection))
+      if (latest.selected?.id !== selection.runId || latest.selected.dayId !== selection.dayId) throw new AppError('storage_read')
+      return { latest: { ...latest, selected: latest.selected } }
+    } catch (error) {
+      report(error)
+      return { readError: error }
+    }
+  }
+
+  function adopt(latest: Stored) {
+    const { selected } = latest
+    if (selected.mentorDay && matchesActor(latest)) publish(draftOf({ ...selected, mentorDay: selected.mentorDay }))
+    onAdopt(latest)
+  }
+
+  async function handleFailure(error: unknown, review = false) {
+    report(error)
+    const stale = error instanceof AppError && ['stale', 'locked', 'wrong_role', 'command_conflict'].includes(error.code)
+    if (!stale) {
+      publish({ ...current.current, writing: false, problem: { error } })
+      return false
+    }
+    draftAttempt.current = undefined
+    reviewAttempt.current = undefined
+    const conflict = await readStored()
+    const state = current.current
+    if (review && conflict.latest && matchesActor(conflict.latest) && !Object.keys(changesSince(state)).length) {
+      adopt(conflict.latest)
+      setNotice('Løpet ble endret. Relevansavgjørelsen ble ikke lagret. Kontroller det lagrede sjåførsvaret og velg på nytt.')
+    } else publish({ ...state, writing: false, problem: { error, conflict } })
+    return false
+  }
+
+  async function writeDraft(changes: MentorDayChanges) {
+    deadline.reset()
+    const { saved } = current.current
+    publish({ ...current.current, writing: true })
+    draftAttempt.current ??= application.newMentorDayCommand(actor, saved, changes)
+    const command = draftAttempt.current
+    try {
+      const receipt = await application.withOpenStorage(() => application.executeMentorDay(command))
+      draftAttempt.current = undefined
+      const mentorDay = {
+        ...saved.mentorDay,
+        ...applyMentorChanges(saved.mentorDay, command.payload.changes, { ...actor, role: 'fadder', name: saved.mentorDay.mentorName }),
+      }
+      const rows = { ...current.current.rows }
+      for (const [id, sent] of Object.entries(command.payload.changes.answers ?? {})) {
+        const mine = rows[id]
+        if (mine.reasonDraft === null && sent.reasonDraft === undefined && mine.value === sent.value && mine.reason === sent.reason) {
+          rows[id] = { ...mine, reasonDraft: undefined }
+        }
+      }
+      const next = { ...current.current, saved: { ...saved, mentorDay, revision: receipt.revision }, rows, writing: false }
+      publish(next)
+      onSaved(next.saved)
+      if (Object.keys(changesSince(next)).length) schedule()
+      else deadline.reset()
+      return true
+    } catch (error) {
+      return handleFailure(error)
+    }
+  }
+
+  async function flush(drain = true, duringReview = false) {
+    deadline.cancel()
+    if (processing.current && !duringReview) return false
+    while (true) {
+      if (active.current) {
+        if (!drain) return true
+        if (!await active.current) return false
+        continue
+      }
+      const state = current.current
+      if (state.problem || (reviewAttempt.current && !duringReview)) return false
+      const changes = changesSince(state)
+      if (!draftAttempt.current && !Object.keys(changes).length) {
+        deadline.reset()
+        return true
+      }
+      const writing = writeDraft(changes)
+      active.current = writing
+      const result = await writing
+      active.current = undefined
+      if (!result || !drain) return result
+    }
+  }
+
+  async function writeReview(command: ReviewRelevanceCommand) {
+    const { saved } = current.current
+    publish({ ...current.current, writing: true, problem: undefined })
+    try {
+      const receipt = await application.withOpenStorage(() => application.executeReview(command))
+      reviewAttempt.current = undefined
+      const { criterionId, answerId, answerRevision, decision, rejectionComment } = command.payload
+      const previous = saved.mentorDay.relevance[criterionId]
+      if (previous.state === 'not_applicable') throw new AppError('storage_read')
+      const mentorActor = { ...actor, role: 'fadder' as const, name: saved.mentorDay.mentorName }
+      const target = { answerId, answerRevision }
+      const review: RelevanceReview = decision === 'accepted'
+        ? { ...target, decision, actor: mentorActor } : { ...target, decision, rejectionComment, actor: mentorActor }
+      const rejectionDrafts = { ...saved.mentorDay.rejectionDrafts }
+      const localRejections = { ...current.current.rejectionDrafts }
+      if (decision === 'rejected') {
+        delete rejectionDrafts[criterionId]
+        delete localRejections[criterionId]
+      }
+      const mentorDay = {
+        ...saved.mentorDay, rejectionDrafts,
+        relevance: {
+          ...saved.mentorDay.relevance,
+          [criterionId]: { state: decision, target, reason: previous.reason, review },
+        },
+      }
+      const next = {
+        ...current.current, saved: { ...saved, mentorDay, revision: receipt.revision },
+        rejectionDrafts: localRejections, writing: false,
+      }
+      publish(next)
+      onSaved(next.saved)
+      return true
+    } catch (error) {
+      return handleFailure(error, true)
+    }
+  }
+
+  async function review(id: string, input: ReviewInput, rejectionDraft?: string) {
+    if (processing.current || reviewAttempt.current || current.current.problem || !current.current.saved.mentorDay.editable) return
+    if (rejectionDraft !== undefined) updateText('rejectionDrafts', id, rejectionDraft)
+    const attempt: ReviewAttempt = { id, input }
+    reviewAttempt.current = attempt
+    await finishReview(attempt)
+  }
+
+  async function finishReview(attempt: ReviewAttempt) {
+    processing.current = true
+    setReviewing(true)
+    setNotice('')
+    if (current.current.problem) publish({ ...current.current, problem: undefined })
+    try {
+      if (!attempt.command) {
+        if (!await flush(true, true)) return
+        attempt.command = application.newReviewCommand(actor, current.current.saved, attempt.id, attempt.input)
+      }
+      await writeReview(attempt.command)
+    } finally {
+      processing.current = false
+      setReviewing(false)
+    }
+  }
+
+  async function retry() {
+    const problem = current.current.problem
+    if (!problem || problem.conflict || processing.current || active.current) return
+    if (reviewAttempt.current) await finishReview(reviewAttempt.current)
+    else {
+      publish({ ...current.current, problem: undefined })
+      await flush()
+    }
+  }
+
+  async function refreshConflict(restoreRole = false) {
+    if (processing.current || !current.current.problem?.conflict) return
+    processing.current = true
+    setReviewing(true)
+    try {
+      const conflict = await readStored(restoreRole)
+      const state = current.current
+      if (state.problem) publish({ ...state, problem: { ...state.problem, conflict } })
+    } finally {
+      processing.current = false
+      setReviewing(false)
+    }
+  }
+
+  async function resolveConflict(keepMine: boolean) {
+    const state = current.current
+    const latest = state.problem?.conflict?.latest
+    if (!latest || processing.current) return
+    setNotice('')
+    if (!keepMine) {
+      adopt(latest)
+      return
+    }
+    const { selected } = latest
+    if (!selected.mentorDay?.editable || !matchesActor(latest)) return
+    const next = draftOf({ ...selected, mentorDay: selected.mentorDay })
+    const saved = draftOf(state.saved)
+    const changes = changesSince(state)
+    const rows = { ...next.rows }
+    for (const id of Object.keys(changes.answers ?? {})) {
+      const mine = state.rows[id]
+      const previous = saved.rows[id]
+      rows[id] = {
+        ...(mine.value !== previous.value || mine.reason !== previous.reason ? mine : rows[id]),
+        reasonDraft: mine.reasonDraft !== previous.reasonDraft ? mine.reasonDraft : rows[id].reasonDraft,
+      }
+    }
+    publish({
+      ...next, rows, comments: { ...next.comments, ...changes.comments },
+      rejectionDrafts: { ...next.rejectionDrafts, ...changes.rejectionDrafts },
+    })
+    onSaved(next.saved)
+    await flush()
+  }
+
+  async function refresh() {
+    if (processing.current || reviewAttempt.current) return false
+    processing.current = true
+    setReviewing(true)
+    try {
+      if (!await flush(true, true)) return false
+      const { latest } = await readStored()
+      if (!latest) return false
+      adopt(latest)
+      setNotice('')
+      return Boolean(latest.selected.mentorDay && matchesActor(latest))
+    } finally {
+      processing.current = false
+      setReviewing(false)
+    }
+  }
+
+  const changes = changesSince(draft)
+  const conflict = draft.problem?.conflict
+  return {
+    draft, changes, notice, conflict, reviewing, updateRows, updateText, flush, review, retry, refresh, refreshConflict, resolveConflict,
+    staleRole: Boolean(conflict?.latest && !matchesActor(conflict.latest)),
+    reviewPending: Boolean(reviewAttempt.current),
+    dirty: Boolean(draft.problem || Object.keys(changes).length || draftAttempt.current || reviewAttempt.current),
+  }
+}

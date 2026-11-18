@@ -7,6 +7,8 @@ import { confirmBaseline, updateBaselineDraft, validateSavedBaseline } from '../
 import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../../domain/baseline.ts'
 import { confirmDriverDay, updateDriverDayDraft, validateSavedDriverDays } from '../../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../../domain/driver-day.ts'
+import { reviewRelevance, updateMentorDay, validateSavedMentorDays } from '../../domain/mentor-day.ts'
+import type { ReviewRelevanceCommand, SaveMentorDayCommand } from '../../domain/mentor-day.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
 export const SCHEMA_VERSION = 1
@@ -41,6 +43,7 @@ function readRun(record: SavedRun) {
   validateSavedRun(run)
   validateSavedBaseline(run)
   validateSavedDriverDays(run)
+  validateSavedMentorDays(run)
   return run
 }
 
@@ -307,6 +310,18 @@ export class IndexedDbRunStore implements RunStore {
   confirmDriverDay(command: ConfirmDriverDayCommand, fingerprint: string): Promise<RunReceipt> {
     return this.#mutateRun(command, fingerprint, run => ({
       run: confirmDriverDay(run, command), dayId: command.payload.dayId,
+    }))
+  }
+
+  saveMentorDay(command: SaveMentorDayCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: updateMentorDay(run, command), dayId: command.payload.dayId,
+    }))
+  }
+
+  reviewRelevance(command: ReviewRelevanceCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: reviewRelevance(run, command), dayId: command.payload.dayId,
     }))
   }
 

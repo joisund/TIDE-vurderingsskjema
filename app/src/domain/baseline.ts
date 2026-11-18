@@ -9,7 +9,7 @@ export type AnswerContent = { value: AnswerValue | null; reason: string | null }
 export type Answer = AnswerContent & {
   id: string
   criterionId: string
-  phase: 'before' | 'driver_after'
+  phase: 'before' | 'driver_after' | 'mentor'
   answerRevision: number
 }
 export type DriverAfterAnswer = Answer & { locked: boolean; inheritedFrom?: string }

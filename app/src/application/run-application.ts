@@ -12,6 +12,10 @@ import {
   validateConfirmDriverDayCommand, validateDriverDayDraftCommand,
 } from '../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, DriverDayChanges, SaveDriverDayDraftCommand } from '../domain/driver-day.ts'
+import {
+  driverReadyForMentorDay, driverRelevance, mentorDayOf, validateReviewRelevance, validateSaveMentorDay,
+} from '../domain/mentor-day.ts'
+import type { MentorDayChanges, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 
 function summary(run: Run) {
   const identity = run.firstDay.driverIdentity ?? run.driver
@@ -58,6 +62,23 @@ function driverAfterView(run: Run, day: Day, role: Role) {
   }
 }
 
+function mentorDayView(run: Run, day: Day) {
+  const { answers, reasonDrafts, comments, rejectionDrafts } = mentorDayOf(run, day)
+  const editable = !dayLocks(run, day).dayLocked
+  return {
+    answers, comments,
+    reasonDrafts: editable ? reasonDrafts : {},
+    rejectionDrafts: editable ? rejectionDrafts : {},
+    relevance: driverRelevance(run, day),
+    driverReady: driverReadyForMentorDay(run, day),
+    driverName: day.driverConfirmation?.actor.name ?? dayDraft(run, day).driverName,
+    mentorName: day.mentorName,
+    criteria: run.content.criteria,
+    confirmation: day.mentorConfirmation,
+    editable,
+  }
+}
+
 function toView(state: WorkspaceState) {
   const selection = state.session.selection
   const run = state.runs.find(item => item.id === selection?.runId)
@@ -77,6 +98,7 @@ function toView(state: WorkspaceState) {
       ...dayLocks(run, day),
       baseline: baselineView(run, state.session.actor.role),
       driverAfter: driverAfterView(run, day, state.session.actor.role),
+      ...(state.session.actor.role === 'fadder' && { mentorDay: mentorDayView(run, day) }),
       planRevision: plan.revision,
       plannedLastDay: plan.lastDay,
       plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
@@ -284,6 +306,46 @@ export class RunApplication {
       'confirm-driver-day', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.planRevision, payload.confirmedAt,
     ])
     return this.#store.confirmDriverDay(snapshot, fingerprint)
+  }
+
+  newMentorDayCommand(actor: Actor, day: DayView, changes: MentorDayChanges): SaveMentorDayCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, changes },
+    }
+  }
+
+  async executeMentorDay(command: SaveMentorDayCommand) {
+    validateSaveMentorDay(command)
+    const { answers, comments, rejectionDrafts } = command.payload.changes
+    const changes = {
+      ...(answers && { answers: orderedChanges(answers) }),
+      ...(comments && { comments: Object.fromEntries(Object.entries(comments).sort()) }),
+      ...(rejectionDrafts && { rejectionDrafts: Object.fromEntries(Object.entries(rejectionDrafts).sort()) }),
+    }
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { dayId: command.payload.dayId, changes } }
+    const { runId, actor, expectedRevision, payload } = snapshot
+    return this.#store.saveMentorDay(snapshot, JSON.stringify([
+      'save-mentor-day', runId, actor.id, actor.role, expectedRevision, payload.dayId,
+      changes.answers && answerFingerprint(changes.answers), changes.comments, changes.rejectionDrafts,
+    ]))
+  }
+
+  newReviewCommand(actor: Actor, day: DayView, criterionId: string, review: ReviewInput): ReviewRelevanceCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, criterionId, ...review },
+    }
+  }
+
+  async executeReview(command: ReviewRelevanceCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    validateReviewRelevance(snapshot)
+    const { runId, actor, expectedRevision, payload } = snapshot
+    return this.#store.reviewRelevance(snapshot, JSON.stringify([
+      'review-driver-relevance', runId, actor.id, actor.role, expectedRevision, payload.dayId,
+      payload.criterionId, payload.answerId, payload.answerRevision, payload.decision, payload.rejectionComment,
+    ]))
   }
 
   async read(selection?: Selection) {

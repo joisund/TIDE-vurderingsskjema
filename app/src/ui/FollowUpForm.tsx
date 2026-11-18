@@ -1,5 +1,5 @@
 import { availableExtraDays } from '../domain/follow-up.ts'
-import type { FollowUpChoice, FollowUpInput, previewFollowUp } from '../domain/follow-up.ts'
+import type { FollowUpChoice, FollowUpInput, PlanEvent, previewFollowUp } from '../domain/follow-up.ts'
 import type { DayView } from '../application/run-application.ts'
 import { focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate } from './CalendarDate.tsx'
@@ -14,6 +14,29 @@ function followUpText(choice?: FollowUpChoice) {
     case 'days': return `Ja · ${choice.extraDays} ekstra ${choice.extraDays === 1 ? 'fadderdag' : 'fadderdager'}`
     default: return 'Ubesvart'
   }
+}
+
+export function FollowUpText({ choice }: { choice?: FollowUpChoice }) {
+  return <>{followUpText(choice)}</>
+}
+
+export function PlanHistory({ history }: { history: readonly PlanEvent[] }) {
+  if (!history.length) return null
+  return (
+    <details className="field-check">
+      <summary>Planhistorikk</summary>
+      <ol className="follow-up-history">
+        {history.map(event => (
+          <li key={event.commandId}>
+            <p><strong>Dag {event.dayNumber} · <CalendarDate value={event.date} /></strong> · {event.actor.name}, fadder</p>
+            <p>{event.source === 'extension' && 'Senere utvidelse · '}{followUpText(event.choice)}</p>
+            <p>Planlagt siste dag · {event.oldLastDay === event.newLastDay
+              ? `Dag ${event.newLastDay} (uendret)` : `Dag ${event.oldLastDay} → dag ${event.newLastDay}`}</p>
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
 }
 
 function followUpDraftText(input: FollowUpInput) {
@@ -144,21 +167,7 @@ export function FollowUpForm({ view, value, result, dirty, showIssues, blocked, 
           )}
         </div>
       )}
-      {history.length > 0 && (
-        <details className="field-check">
-          <summary>Planhistorikk</summary>
-          <ol className="follow-up-history">
-            {history.map(event => (
-              <li key={event.commandId}>
-                <p><strong>Dag {event.dayNumber} · <CalendarDate value={event.date} /></strong> · {event.actor.name}, fadder</p>
-                <p>{event.source === 'extension' && 'Senere utvidelse · '}{followUpText(event.choice)}</p>
-                <p>Planlagt siste dag · {event.oldLastDay === event.newLastDay
-                  ? `Dag ${event.newLastDay} (uendret)` : `Dag ${event.oldLastDay} → dag ${event.newLastDay}`}</p>
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
+      <PlanHistory history={history} />
     </section>
   )
 }

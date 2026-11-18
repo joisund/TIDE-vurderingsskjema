@@ -44,7 +44,7 @@ export function writeSavedRun(page: Page, run: Run, dayId?: string): Promise<voi
     try {
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(dayId ? ['runs', 'meta'] : ['runs'], 'readwrite')
-        tx.objectStore('runs').put({ schemaVersion: 1, data: run }, run.id)
+        tx.objectStore('runs').put({ schemaVersion: db.version, data: run }, run.id)
         if (dayId) {
           const meta = tx.objectStore('meta')
           const session = meta.get('session')

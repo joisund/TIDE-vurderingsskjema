@@ -4,9 +4,12 @@ import { mkdtempDisposableSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { lockedRun, readSavedRun, writeSavedRun } from './saved-run-fixture.ts'
+import { SCHEMA_VERSION } from '../../src/adapters/indexeddb/run-store.ts'
 
 const origin = 'http://127.0.0.1:4173'
 const input = { name: 'Nora Eksempel', employee: 'DEMO-101', mentor: 'Emil Eksempel', date: '2027-03-28' }
+const plannedDate = (page: Page) => page.locator('.details > div').filter({ hasText: 'Planlagt siste dag' }).locator('time')
+const timelineDate = (page: Page) => page.getByRole('region', { name: 'Registrerte dager' }).locator('[aria-current] time')
 
 async function openForm(page: Page) {
   const button = page.getByRole('button', { name: 'Opprett løp' })
@@ -207,7 +210,7 @@ test('abort beholder input, ikke tidlig kvittering, dobbeltklikk fullfører bare
   await expect(page.getByRole('status')).toHaveText('')
   await expect(page.getByLabel('Sjåførnavn')).toHaveValue(input.name)
   await expect(page.getByLabel('Første dato')).toHaveValue(input.date)
-  await expect.poll(() => diagnostic).toEqual([{ code: 'storage_write', build: expect.stringMatching(/\S/), schema: 1 }])
+  await expect.poll(() => diagnostic).toEqual([{ code: 'storage_write', build: expect.stringMatching(/\S/), schema: SCHEMA_VERSION }])
 
   const retry = page.getByRole('button', { name: 'Prøv igjen' })
   await retry.evaluate((button: HTMLButtonElement) => {
@@ -305,7 +308,7 @@ test('to løp holdes atskilt, feil lesing er synlig, valg og rolle gjenåpnes p�
 }, testInfo) => {
   using folder = mkdtempDisposableSync(join(tmpdir(), 'tide-pw-'))
   const engine = playwright[browserName]
-  const options = { baseURL: origin, locale: 'nb-NO', timezoneId: 'Europe/Oslo' }
+  const options = { baseURL: testInfo.project.use.baseURL, locale: 'nb-NO', timezoneId: 'Europe/Oslo' }
   let context = await engine.launchPersistentContext(folder.path, options)
   try {
     const page = context.pages()[0]
@@ -314,8 +317,8 @@ test('to løp holdes atskilt, feil lesing er synlig, valg og rolle gjenåpnes p�
     await fillForm(page, input, '1')
     await save(page)
     await expect(page.getByLabel('Dato', { exact: true })).toHaveValue(input.date)
-    await expect(page.locator('time')).toHaveCount(1)
-    await expect(page.locator('time').first()).toHaveAttribute('datetime', input.date)
+    await expect(plannedDate(page)).toHaveAttribute('datetime', input.date)
+    await expect(timelineDate(page)).toHaveAttribute('datetime', input.date)
     await page.getByRole('button', { name: 'Til løpsoversikten' }).click()
     await openForm(page)
     const other = { name: 'Kim Testfører', employee: 'DEMO-102', mentor: 'Ada Eksempel', date: '2027-10-31' }
@@ -341,7 +344,7 @@ test('to løp holdes atskilt, feil lesing er synlig, valg og rolle gjenåpnes p�
       await expect(target.getByText('Emil Eksempel', { exact: true })).toBeVisible()
       await expect(target.getByRole('group', { name: 'Buss 1' })).toContainText('507')
       await expect(target.getByLabel('Inn-tid')).toHaveValue('06:10')
-      await expect(target.locator('time').first()).toHaveAttribute('datetime', input.date)
+      await expect(timelineDate(target)).toHaveAttribute('datetime', input.date)
       const plan = target.locator('.details > div').filter({ hasText: 'Planlagt siste dag' })
       await expect(plan).toContainText('Dag 1')
       await expect(plan.locator('time')).toHaveAttribute('datetime', input.date)
@@ -360,7 +363,7 @@ test('to løp holdes atskilt, feil lesing er synlig, valg og rolle gjenåpnes p�
     await assertRestored(restored)
     const restartMs = Math.round(performance.now() - restartStart)
     expect(restartMs).toBeLessThanOrEqual(5000)
-    console.log(`${testInfo.project.name}: refresh ${refreshMs} ms, normal lukking/gjenåpning inkl. nettleserstart ${restartMs} ms, 2 løp × 1 dag, origin ${origin}`)
+    console.log(`${testInfo.project.name}: refresh ${refreshMs} ms, normal lukking/gjenåpning inkl. nettleserstart ${restartMs} ms, 2 løp × 1 dag, origin ${options.baseURL}`)
 
     await restored.addInitScript(() => {
       IDBObjectStore.prototype.getAll = () => { throw new DOMException('Lesefeil', 'UnknownError') }
@@ -532,10 +535,12 @@ test('gyldig lagret dato består ved ugyldig innskriving og lagres når den er k
   await expect(page.getByRole('alert')).toHaveText('Endringene er ikke lagret. Prøv igjen.')
   await expect(date).toHaveValue('2027-02-29')
   await expect(date).toHaveAccessibleDescription(/gyldig dato/)
-  await expect(page.locator('time')).toHaveAttribute('datetime', input.date)
+  await expect(plannedDate(page)).toHaveAttribute('datetime', input.date)
+  await expect(timelineDate(page)).toHaveAttribute('datetime', input.date)
   await date.fill('2028-02-29')
   await expect(page.getByRole('status')).toHaveText('Lagret på denne enheten')
-  await expect(page.locator('time')).toHaveAttribute('datetime', '2028-02-29')
+  await expect(plannedDate(page)).toHaveAttribute('datetime', '2028-02-29')
+  await expect(timelineDate(page)).toHaveAttribute('datetime', '2028-02-29')
   await page.reload()
   await expect(date).toHaveValue('2028-02-29')
 })
@@ -786,7 +791,7 @@ test('kommando-ID-konflikt gir en ny ID ved uttrykkelig forsøk med samme innhol
         Reflect.set(window, 'collisionId', collision)
         if (key === collision) {
           Object.defineProperty(result, 'result', {
-            get: () => ({ schemaVersion: 1, data: { fingerprint: 'annet tidligere innhold' } }),
+            get: () => ({ schemaVersion: this.transaction.db.version, data: { fingerprint: 'annet tidligere innhold' } }),
           })
         }
       }

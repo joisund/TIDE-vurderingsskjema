@@ -5,6 +5,8 @@ import { updateDayDraft } from '../../domain/day-draft.ts'
 import type { SaveDayDraftCommand } from '../../domain/day-draft.ts'
 import { confirmBaseline, updateBaselineDraft, validateSavedBaseline } from '../../domain/baseline.ts'
 import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../../domain/baseline.ts'
+import { createDay } from '../../domain/create-day.ts'
+import type { CreateDayCommand, CreateDayReceipt } from '../../domain/create-day.ts'
 import { confirmDriverDay, updateDriverDayDraft, validateSavedDriverDays } from '../../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../../domain/driver-day.ts'
 import { confirmMentorDay, reviewRelevance, updateMentorDay, validateSavedMentorDays } from '../../domain/mentor-day.ts'
@@ -13,7 +15,7 @@ import { currentPlan, followUpWindow, runStatus, saveFollowUp, validateSavedPlan
 import type { FollowUpReceipt, SaveFollowUpCommand } from '../../domain/follow-up.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 const META = 'meta'
 const RUNS = 'runs'
@@ -50,6 +52,35 @@ function readRun(record: SavedRun) {
   return run
 }
 
+function migrateV1(tx: IDBTransaction) {
+  const meta = tx.objectStore(META)
+  const schema = meta.get(SCHEMA)
+  schema.onsuccess = () => {
+    if (schema.result?.schemaVersion !== 1) {
+      tx.abort()
+      return
+    }
+    meta.put({ ...schema.result, schemaVersion: SCHEMA_VERSION }, SCHEMA)
+  }
+  for (const name of [META, RUNS, COMMANDS]) {
+    const request = tx.objectStore(name).openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      if (name !== META || cursor.key === SESSION) {
+        const record = cursor.value as Envelope<unknown>
+        if (record?.schemaVersion !== 1 || !Object.hasOwn(record, 'data')) {
+          tx.abort()
+          return
+        }
+        // Behold faginnhold, snapshots og kvitteringer verbatim.
+        cursor.update({ ...record, schemaVersion: SCHEMA_VERSION })
+      }
+      cursor.continue()
+    }
+  }
+}
+
 function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(name, SCHEMA_VERSION)
@@ -62,11 +93,22 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
       reject(new AppError(request.error?.name === 'VersionError' ? 'unsupported_schema' : 'storage_open'))
     }
     request.onupgradeneeded = (event) => {
+      const tx = request.transaction!
+      if (blocked) {
+        tx.abort()
+        return
+      }
       if (event.oldVersion === 0) {
         const db = request.result
         db.createObjectStore(META).add({ schemaVersion: SCHEMA_VERSION }, SCHEMA)
         db.createObjectStore(RUNS).createIndex('firstDayId', 'data.firstDay.id', { unique: true })
         db.createObjectStore(COMMANDS)
+      } else {
+        try {
+          migrateV1(tx)
+        } catch {
+          tx.abort()
+        }
       }
     }
     request.onsuccess = () => {
@@ -286,6 +328,11 @@ export class IndexedDbRunStore implements RunStore {
     })
   }
 
+  createDay(command: CreateDayCommand, fingerprint: string): Promise<CreateDayReceipt> {
+    return this.#mutateRunWithReceipt(command, fingerprint, run => createDay(run, command),
+      (run, receipt, previous) => ({ ...receipt, created: run !== previous }), true)
+  }
+
   saveDayDraft(command: SaveDayDraftCommand, fingerprint: string): Promise<RunReceipt> {
     return this.#mutateRun(command, fingerprint, run => ({
       run: updateDayDraft(run, command), dayId: command.payload.dayId,
@@ -358,7 +405,8 @@ export class IndexedDbRunStore implements RunStore {
     command: Pick<SaveDayDraftCommand, 'commandId' | 'runId' | 'actor'>,
     fingerprint: string,
     update: (run: Run) => { run: Run; dayId: string },
-    makeReceipt: (run: Run, receipt: RunReceipt) => T,
+    makeReceipt: (run: Run, receipt: RunReceipt, previous: Run) => T,
+    selectDay = false,
   ): Promise<T> {
     return this.#withDatabase([META, RUNS, COMMANDS], 'readwrite', operations => {
       operations.get<SavedReceipt<T>>(COMMANDS, command.commandId, record => {
@@ -373,10 +421,12 @@ export class IndexedDbRunStore implements RunStore {
           if (actor.role !== session.role || actor.id !== session.actors[session.role]) throw new AppError('stale')
           operations.get<SavedRun>(RUNS, runId, record => {
             if (!record) throw new AppError('run_missing')
-            const { run, dayId } = update(readRun(record))
-            const receipt = makeReceipt(run, { runId, dayId, revision: run.revision })
-            operations.put(RUNS, runId, envelope(run))
+            const previous = readRun(record)
+            const { run, dayId } = update(previous)
+            const receipt = makeReceipt(run, { runId, dayId, revision: run.revision }, previous)
+            if (run !== previous) operations.put(RUNS, runId, envelope(run))
             operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
+            if (selectDay) operations.put(META, SESSION, envelope({ ...session, selection: { runId, dayId } }))
             operations.finish(receipt)
           })
         })

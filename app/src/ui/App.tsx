@@ -2,18 +2,23 @@ import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useSta
 import { flushSync } from 'react-dom'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { DayField } from '../domain/day-draft.ts'
+import { availableExtraDays } from '../domain/follow-up.ts'
 import { AppError, validateCreateRun } from '../domain/run.ts'
 import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
 import { CreateRunForm } from './CreateRunForm.tsx'
+import { CreateDayForm } from './CreateDayForm.tsx'
+import { ExtendRunForm } from './ExtendRunForm.tsx'
 import { CalendarDate } from './CalendarDate.tsx'
 import { AssessmentForm } from './AssessmentForm.tsx'
 import { DayDraftForm } from './DayDraftForm.tsx'
+import { DayHistory, DayTimeline } from './DayHistory.tsx'
 import { MentorAssessmentForm } from './MentorAssessmentForm.tsx'
 import type { MentorAssessmentHandle } from './MentorAssessmentForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 
-type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day' | 'baseline' | 'after' | 'mentor'
-type MentorRestore = 'checking' | 'read-error' | 'local-draft'
+type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend'
+type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | DayScreen
+type RoleRestore = 'checking' | 'read-error' | 'local-draft'
 type Props = {
   application: RunApplication
   logo: string
@@ -35,6 +40,9 @@ const headings: Record<Screen, string> = {
   baseline: 'Førvurdering',
   after: 'Dagens ettervurdering',
   mentor: 'Dagens faddervurdering',
+  history: 'Historikk',
+  'create-day': 'Opprett neste dag',
+  extend: 'Utvid planen',
 }
 
 export function App({ application, logo, prepare, requestPersistence, report }: Props) {
@@ -49,20 +57,24 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const [busy, setBusy] = useState(false)
   const [storageStatus, setStorageStatus] = useState('')
   const [navigationError, setNavigationError] = useState('')
-  const [mentorRestore, setMentorRestore] = useState<MentorRestore>()
+  const [roleRestore, setRoleRestore] = useState<RoleRestore>()
+  const [dayEditorGeneration, setDayEditorGeneration] = useState(0)
   const [online, setOnline] = useState(() => navigator.onLine)
   const editor = useRef<MentorAssessmentHandle>(null)
   const [fieldToFix, setFieldToFix] = useState<DayField>()
   const focusDayField = useRef<DayField>(undefined)
   const roleSelect = useRef<HTMLSelectElement>(null)
-  const cachedMentorDialog = useRef<{ element: HTMLDialogElement; focus: Element | null }>(undefined)
+  const cachedDialog = useRef<{ element: HTMLDialogElement; focus: Element | null }>(undefined)
   const inFlight = useRef(false)
   const attempt = useRef<{ fields: CreateRunFields; command: CreateRunCommand }>(undefined)
   const heading = useRef<HTMLHeadingElement>(null)
   const focusHeading = useRef(false)
   const persistenceRequested = useRef(false)
   const initialization = useRef<Promise<WorkspaceView>>(undefined)
-  const selected = screen === 'day' || screen === 'baseline' || screen === 'after' || screen === 'mentor' ? view?.selected : undefined
+  const selected = screen === 'loading' || screen === 'unavailable' || screen === 'runs' || screen === 'create' ? undefined : view?.selected
+  const dayCommandForm = screen === 'create-day' || screen === 'extend'
+  const draftRole = dayCommandForm ? 'fadder' : (view?.actor.role ?? 'fadder')
+  const guardedScreen = dayCommandForm || screen === 'mentor' || screen === 'history' || screen === 'day'
 
   const accept = useCallback((data: WorkspaceView) => {
     setView(data)
@@ -107,7 +119,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       focusHeading.current = false
       heading.current?.focus()
     }
-  }, [screen])
+  }, [screen, selected?.dayId])
 
   useEffect(() => {
     const updateNetwork = () => setOnline(navigator.onLine)
@@ -122,7 +134,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   function navigate(next: Screen) {
     focusHeading.current = true
     if (next !== 'day') setFieldToFix(undefined)
-    if (next !== 'mentor') clearMentorRestore()
+    clearRoleRestore()
     setScreen(next)
   }
 
@@ -195,13 +207,15 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  function openRun(id: string, dayId?: string) {
+  function openRun(id: string, dayId?: string, next: 'day' | 'history' = 'day') {
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        setView(await application.withOpenStorage(() => application.select(id, dayId)))
+        const latest = await application.withOpenStorage(() => application.select(id, dayId))
+        if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
+        else setView(latest)
         setStorageStatus('')
-        navigate('day')
+        navigate(next)
       } catch (error) {
         focusHeading.current = true
         fail(error)
@@ -209,7 +223,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  function showAssessmentScreen(next: 'day' | 'baseline' | 'after' | 'mentor', field?: DayField) {
+  function showAssessmentScreen(next: DayScreen, field?: DayField) {
     if (!selected) return
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
@@ -219,7 +233,12 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
           ? application.select(selected.id, dayId)
           : application.read({ runId: selected.id, dayId }))
         if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
-        else setView(latest)
+        else {
+          setView(latest)
+          if (screen === 'day' && latest.selected?.revision !== selected.revision) {
+            setDayEditorGeneration(generation => generation + 1)
+          }
+        }
         if (next === 'after' && !latest.selected?.driverAfter) {
           setNavigationError(explain(new AppError('baseline_required')))
           return
@@ -228,6 +247,16 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
           setNavigationError(explain(new AppError('wrong_role')))
           return
         }
+        if (next === 'create-day' && !latest.selected?.canCreateDay) {
+          setNavigationError(latest.actor.role === 'fadder'
+            ? explain(new AppError('plan_required')) : explain(new AppError('wrong_role')))
+          return
+        }
+        if (next === 'extend' && (!latest.selected?.extensionWindow || !availableExtraDays(latest.selected.extensionWindow).length)) {
+          setNavigationError('Planen kan ikke utvides fra denne dagen.')
+          return
+        }
+        setStorageStatus('')
         focusDayField.current = field
         setFieldToFix(field)
         navigate(next)
@@ -264,10 +293,8 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       setReceipt(undefined)
       setStorageStatus('')
       attempt.current = undefined
-      if (screen === 'mentor' && !next.selected?.mentorDay) {
-        clearMentorRestore()
-        setScreen('day')
-      }
+      clearRoleRestore()
+      if (screen === 'mentor' && !next.selected?.mentorDay) setScreen('day')
     })
     flushSync(() => { setView(next) })
     const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === 'fadder'
@@ -277,63 +304,76 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     else if (returnFocus) roleSelect.current?.focus()
   }
 
-  function clearMentorRestore() {
-    setMentorRestore(undefined)
-    cachedMentorDialog.current = undefined
+  function clearRoleRestore() {
+    setRoleRestore(undefined)
+    cachedDialog.current = undefined
   }
 
-  async function checkRestoredMentor(resume = false) {
-    if (screen !== 'mentor' || !selected || !view) return
-    setMentorRestore('checking')
+  async function checkRestoredRole(resume = false) {
+    if (!guardedScreen || !selected || !view) return
+    setRoleRestore('checking')
     const selection = { runId: selected.id, dayId: selected.dayId }
     try {
-      const next = await application.withOpenStorage(() => resume
-        ? application.changeRole('fadder', selection)
+      const beforeFlush = await application.withOpenStorage(() => resume
+        ? application.changeRole(draftRole, selection)
         : application.read(selection))
+      const sameActor = (state: WorkspaceView) => state.actor.id === view.actor.id && state.actor.role === view.actor.role
+      const shouldFlush = !resume && editor.current && (screen === 'day' || !sameActor(beforeFlush))
+      const flushed = !shouldFlush || await editor.current!.flush()
+      // Rolle og revisjon kan ha endret seg mens editoren ventet på lagring eller feilhåndtering.
+      const next = shouldFlush ? await application.read(selection) : beforeFlush
       const latest = next.selected
-      if (next.actor.id !== view.actor.id || next.actor.role !== view.actor.role) {
-        if (resume) throw new AppError('wrong_role')
-        if (editor.current && !await editor.current.flush()) {
-          setMentorRestore('local-draft')
+      if (!resume && !sameActor(next)) {
+        if (dayCommandForm || !flushed) {
+          setRoleRestore('local-draft')
           return
         }
-        focusHeading.current = true
         replaceRoleView(next)
-      } else if (latest?.dayLocked && !selected.dayLocked) {
+        heading.current?.focus()
+        return
+      }
+      if (screen === 'mentor' && latest?.dayLocked && !selected.dayLocked) {
         flushSync(() => {
           editor.current?.restoreLock?.({ ...next, selected: latest })
-          clearMentorRestore()
+          clearRoleRestore()
         })
         return
       }
-      flushSync(() => setMentorRestore(undefined))
-      const dialog = cachedMentorDialog.current
-      cachedMentorDialog.current = undefined
+      flushSync(() => {
+        if (screen === 'history' || screen === 'day' || dayCommandForm) setView(next)
+        if (screen === 'day' && !resume && flushed && latest?.revision !== selected.revision) {
+          setDayEditorGeneration(generation => generation + 1)
+        }
+        setRoleRestore(undefined)
+      })
+      if (screen === 'history') heading.current?.focus()
+      const dialog = cachedDialog.current
+      cachedDialog.current = undefined
       if (dialog?.element.isConnected && !dialog.element.open) {
         dialog.element.showModal()
         if (dialog.focus instanceof HTMLElement && dialog.element.contains(dialog.focus)) dialog.focus.focus()
       }
     } catch (error) {
       report(error)
-      setMentorRestore(resume ? 'local-draft' : 'read-error')
+      setRoleRestore(resume ? 'local-draft' : 'read-error')
     }
   }
 
-  const hideCachedMentor = useEffectEvent(() => {
+  const hideCachedRoleView = useEffectEvent(() => {
     // Skjul fadderinnhold før nettleseren kan fryse den gamle lesemodellen.
-    if (screen !== 'mentor') return
+    if (!guardedScreen) return
     const dialog = document.querySelector<HTMLDialogElement>('dialog:modal')
     if (dialog) {
-      cachedMentorDialog.current = { element: dialog, focus: document.activeElement }
+      cachedDialog.current = { element: dialog, focus: document.activeElement }
       dialog.close()
     }
-    flushSync(() => setMentorRestore('checking'))
+    flushSync(() => setRoleRestore('checking'))
   })
-  const showCachedMentor = useEffectEvent(() => { void checkRestoredMentor() })
+  const showCachedRoleView = useEffectEvent(() => { void checkRestoredRole() })
 
   useEffect(() => {
-    const onHide = (event: PageTransitionEvent) => { if (event.persisted) hideCachedMentor() }
-    const onShow = (event: PageTransitionEvent) => { if (event.persisted) showCachedMentor() }
+    const onHide = (event: PageTransitionEvent) => { if (event.persisted) hideCachedRoleView() }
+    const onShow = (event: PageTransitionEvent) => { if (event.persisted) showCachedRoleView() }
     window.addEventListener('pagehide', onHide)
     window.addEventListener('pageshow', onShow)
     return () => {
@@ -382,6 +422,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   async function loadCommitted(saved: RunReceipt) {
     try {
       setView(await application.withOpenStorage(() => application.select(saved.runId, saved.dayId)))
+      setStorageStatus('')
       navigate('day')
     } catch (error) {
       report(error)
@@ -436,9 +477,9 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
           <img className="logo" src={logo} alt="Tide" />
           <div className="profile-context">
             <p className="app-name">Digital kjørevurdering</p>
-            {view && !mentorRestore && (
+            {view && !roleRestore && (
               <div className="role">
-                {screen === 'create'
+                {screen === 'create' || screen === 'create-day' || screen === 'extend'
                   ? <p>Simuleringsrolle · {roleName[view.actor.role]}</p>
                   : <>
                       <label htmlFor="simulation-role">Simuleringsrolle</label>
@@ -455,7 +496,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                     </>}
               </div>
             )}
-            {selected && <p className="day-context">
+            {selected && !roleRestore && screen !== 'create-day' && <p className="day-context">
               {(screen === 'baseline' ? selected.baseline.fields.driverName : selected.fields.driverName) || 'Sjåførnavn mangler'}
               {' · Dag '}{screen === 'baseline' ? 1 : selected.day}
             </p>}
@@ -508,8 +549,40 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
               onChange={updateField} onSubmit={submit} onCancel={showRuns} onRefresh={refreshDraft} />
           </>
         )}
+        {screen === 'create-day' && selected && view && (
+          <div hidden={Boolean(roleRestore)}>
+            <CreateDayForm key={selected.id} day={selected} actor={view.actor} application={application} report={report}
+            onWorkspace={setView} onCancel={() => showAssessmentScreen('day')} onComplete={(next, created) => {
+              setView(next)
+              setStorageStatus(created ? '' : 'Datoen er allerede registrert. Den eksisterende dagen er åpnet.')
+              navigate('day')
+            }} />
+          </div>
+        )}
+        {screen === 'extend' && selected && view && (
+          <div hidden={Boolean(roleRestore)}>
+            <ExtendRunForm key={selected.id} day={selected} actor={view.actor} application={application} report={report}
+            onWorkspace={setView} onCancel={() => showAssessmentScreen('day')} onComplete={next => {
+              setView(next)
+              navigate('day')
+            }} />
+          </div>
+        )}
         {screen === 'day' && selected && view && (
-          <>
+          <div hidden={Boolean(roleRestore)}>
+            {storageStatus && <p role="status" className="save-status">{storageStatus}</p>}
+            <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id)} />
+            {view.actor.role === 'fadder' && !selected.dayLocked && selected.status !== 'Avsluttet'
+              && selected.days.length === selected.plannedLastDay && selected.days.length < 5 && (
+              <p className="context">Planen må utvides før neste dag kan opprettes. Bruk oppfølgingen i faddervurderingen.</p>
+            )}
+            {selected.canCreateDay && <button type="button" className="button primary" aria-disabled={busy}
+              onClick={() => showAssessmentScreen('create-day')}>Opprett neste dag</button>}
+            {selected.extensionWindow && availableExtraDays(selected.extensionWindow).length > 0 && (
+              <button type="button" className="button primary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('extend')}>Utvid planen</button>
+            )}
+            {selected.days.length === 5 && <p className="context">Maksimalt fem dager er registrert.</p>}
             <p className="run-status">{selected.status}</p>
             <dl className="details">
               <div>
@@ -546,28 +619,24 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                   onClick={() => showAssessmentScreen('mentor')}>Åpne dagens faddervurdering</button>
               </section>
             )}
-            {(selected.days.length > 1 || selected.days.some(day => day.driverConfirmation || day.dayLocked)) && (
-              <section className="baseline-entry" aria-labelledby="day-history-heading">
-                <h2 id="day-history-heading">Registrerte dager</h2>
-                <ul className="day-history">
-                  {selected.days.map(day => (
-                    <li key={day.id}>
-                      <p>Dag {day.number} · <CalendarDate value={day.date} /></p>
-                      <p>{day.dayLocked ? 'Dagen er låst' : 'Dagen er åpen'}</p>
-                      {day.driverConfirmation && <p>Ettervurdering bekreftet av {day.driverConfirmation.actor.name}, sjåfør.</p>}
-                      {day.mentorConfirmation && <p>Faddervurdering bekreftet av {day.mentorConfirmation.actor.name}, fadder.</p>}
-                      {day.id !== selected.dayId && <button type="button" className="button secondary" aria-disabled={busy}
-                        onClick={() => openRun(selected.id, day.id)}>Åpne dag {day.number}</button>}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
+            <DayDraftForm key={`${view.actor.id}/${selected.id}/${selected.dayId}/${dayEditorGeneration}`} ref={editor}
               initial={selected} actor={view.actor} application={application} report={report}
               onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} fieldToFix={fieldToFix} />
             <div className="actions">
+              <button type="button" className="button secondary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('history')}>Åpne historikk</button>
               <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
+            </div>
+          </div>
+        )}
+        {screen === 'history' && selected && view && !roleRestore && (
+          <>
+            <p>Planlagt siste dag · Dag {selected.plannedLastDay}</p>
+            <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id, 'history')} />
+            <DayHistory key={`${view.actor.id}/${selected.dayId}`} day={selected} />
+            <div className="actions">
+              <button type="button" className="button secondary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>
             </div>
           </>
         )}
@@ -585,8 +654,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
           </>
         )}
         {screen === 'mentor' && selected?.mentorDay && view && (
-          <>
-            <div hidden={Boolean(mentorRestore)}>
+            <div hidden={Boolean(roleRestore)}>
               <MentorAssessmentForm key={`mentor/${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
                 initial={{ ...selected, mentorDay: selected.mentorDay }} actor={view.actor} application={application}
                 report={report} onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy}
@@ -596,20 +664,19 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                   onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>
               </div>
             </div>
-            {mentorRestore === 'checking' && <p role="status">Kontrollerer aktiv rolle …</p>}
-            {mentorRestore === 'read-error' && (
-              <div className="error-panel">
-                <p role="alert">Aktiv rolle kunne ikke kontrolleres.</p>
-                <button type="button" className="button secondary" onClick={() => void checkRestoredMentor()}>Prøv igjen</button>
-              </div>
-            )}
-            {mentorRestore === 'local-draft' && (
-              <div className="error-panel">
-                <p role="alert">Fadderutkastet er fortsatt åpent. Gjenoppta som fadder for å kontrollere og lagre det.</p>
-                <button type="button" className="button secondary" onClick={() => void checkRestoredMentor(true)}>Gjenoppta som fadder</button>
-              </div>
-            )}
-          </>
+        )}
+        {roleRestore === 'checking' && <p role="status">Kontrollerer aktiv rolle …</p>}
+        {roleRestore === 'read-error' && (
+          <div className="error-panel">
+            <p role="alert">Aktiv rolle kunne ikke kontrolleres.</p>
+            <button type="button" className="button secondary" onClick={() => void checkRestoredRole()}>Prøv igjen</button>
+          </div>
+        )}
+        {roleRestore === 'local-draft' && (
+          <div className="error-panel">
+            <p role="alert">{roleName[draftRole]}utkastet er fortsatt åpent. Gjenoppta som {draftRole} for å kontrollere og lagre det.</p>
+            <button type="button" className="button secondary" onClick={() => void checkRestoredRole(true)}>Gjenoppta som {draftRole}</button>
+          </div>
         )}
         {view && persistent === false && (
           <p className="storage-notice">Nettleseren har ikke gitt varig lagring. Opplysningene kan forsvinne hvis nettleseren rydder eller du sletter nettstedsdata.</p>

@@ -79,6 +79,7 @@ export type RunReceipt = { runId: string; dayId: string; revision: number }
 
 export type ErrorCode =
   | 'validation' | 'invalid_command' | 'invalid_content' | 'wrong_role' | 'stale' | 'baseline_required'
+  | 'day_limit' | 'plan_required' | 'driver_identity_required'
   | 'command_conflict' | 'run_missing' | 'day_missing' | 'locked' | 'storage_open' | 'storage_read'
   | 'storage_write' | 'storage_blocked' | 'schema_changed'
   | 'unsupported_schema' | 'resource_load'

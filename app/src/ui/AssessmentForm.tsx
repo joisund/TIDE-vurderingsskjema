@@ -11,7 +11,7 @@ import type { ConfirmDriverDayCommand, EvaluationField, EvaluationTexts } from '
 import { reasonRequirement, validateReason } from '../domain/reason.ts'
 import type { Actor, Criterion, RunReceipt } from '../domain/run.ts'
 import { AssessmentMatrix, Modal } from './AssessmentMatrix.tsx'
-import { answerText, focusMatrixField } from './assessment-fields.ts'
+import { answerText, evaluationLabels, focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate, ConfirmationTime } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
 import { assessmentOf, evaluationDecisionOf, useAssessmentDraft } from './use-assessment-draft.ts'
@@ -30,11 +30,6 @@ type Props = {
   onConfirmIssue: (message: string) => void
   navigating: boolean
 }
-
-const evaluationLabels = {
-  strength1: 'Styrke 1', strength2: 'Styrke 2', strength3: 'Styrke 3',
-  growth1: 'Utviklingsområde 1', growth2: 'Utviklingsområde 2', growth3: 'Utviklingsområde 3',
-} satisfies Record<EvaluationField, string>
 
 const evaluationChoice = { submitted: 'Innsending', skipped: 'Hoppet over' }
 
@@ -351,6 +346,7 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
   return (
     <section aria-label={`Sjåførens ${phaseName.toLowerCase()}`}>
       <p className="context">Sjåfør · {assessment.fields.driverName || 'Sjåførnavn mangler'} · Dag {dayNumber} · <CalendarDate value={assessment.fields.date} /></p>
+      {!after && saved.day !== 1 && <p className="context">Samme førvurdering fra dag 1.</p>}
       {after && <p className="context">Planlagt siste dag · Dag {saved.plannedLastDay}</p>}
       <p ref={lockedStatus} tabIndex={-1} className="baseline-state">
         {confirmation

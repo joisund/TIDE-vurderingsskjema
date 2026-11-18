@@ -89,20 +89,22 @@ function validTexts(texts: unknown): texts is EvaluationTexts {
 
 export function validateSavedDriverDays(run: Run) {
   const plan = currentPlan(run)
+  const baselineConfirmed = firstDayCanDriveAfter(run)
   const days = runDays(run)
   for (const day of days) {
     const { driverAfterAnswers, driverAfterReasonDrafts, driverConfirmation, evaluationDraft, driverEvaluation } = day
-    if (!firstDayCanDriveAfter(run)) {
-      if ([driverAfterAnswers, driverAfterReasonDrafts, driverConfirmation, evaluationDraft, driverEvaluation]
-        .some(value => value !== undefined)) {
-        throw new AppError('storage_read')
-      }
-      continue
-    }
     if (driverAfterAnswers !== undefined) {
       validateAnswerSet(run, driverAfterAnswers, 'driver_after', day.id)
       if (day.number !== 1 && driverAfterAnswers.some(answer => answer.locked !== false || answer.inheritedFrom !== undefined
         || !validAnswerContent(answer))) throw new AppError('storage_read')
+    }
+    if (!baselineConfirmed) {
+      if ((driverAfterAnswers !== undefined && (day.number === 1
+        || driverAfterAnswers.some(answer => answer.value !== null || answer.answerRevision !== 0)))
+        || [driverAfterReasonDrafts, driverConfirmation, evaluationDraft, driverEvaluation].some(value => value !== undefined)) {
+        throw new AppError('storage_read')
+      }
+      continue
     }
     if (driverAfterReasonDrafts !== undefined && (!driverAfterAnswers || driverConfirmation
       || !validReasonDrafts(driverAfterAnswers, driverAfterReasonDrafts)

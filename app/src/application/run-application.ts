@@ -7,6 +7,8 @@ import {
   baselineOf, firstDayCanDriveAfter, validateBaselineDraftCommand, validateConfirmBaselineCommand,
 } from '../domain/baseline.ts'
 import type { BaselineChanges, ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../domain/baseline.ts'
+import { validateCreateDayCommand } from '../domain/create-day.ts'
+import type { CreateDayCommand, CreateDayFields } from '../domain/create-day.ts'
 import {
   currentPlan, driverAfterOf, evaluationFields, offersEvaluation, snapshotEvaluation,
   validateConfirmDriverDayCommand, validateDriverDayDraftCommand,
@@ -105,7 +107,12 @@ function toView(state: WorkspaceState) {
       ...dayLocks(run, day),
       baseline: baselineView(run, state.session.actor.role),
       driverAfter: driverAfterView(run, day, state.session.actor.role),
-      ...(state.session.actor.role === 'fadder' && { mentorDay: mentorDayView(run, day) }),
+      ...(state.session.actor.role === 'fadder' && {
+        mentorDay: mentorDayView(run, day),
+        extensionWindow: run.lifecycle === 'open' && day.mentorConfirmation
+          ? followUpWindow(run, day, 'extension') : undefined,
+      }),
+      canCreateDay: run.lifecycle === 'open' && runDays(run).length < plan.lastDay && state.session.actor.role === 'fadder',
       planRevision: plan.revision,
       plannedLastDay: plan.lastDay,
       plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
@@ -229,6 +236,22 @@ export class RunApplication {
     const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
     validateCreateIds(snapshot)
     return this.#store.create(snapshot, fingerprint(snapshot), () => createRun(snapshot, this.#content))
+  }
+
+  newCreateDayCommand(actor: Actor, day: DayView, fields: CreateDayFields): CreateDayCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { ...fields, dayId: this.#newId() },
+    }
+  }
+
+  async executeCreateDay(command: CreateDayCommand) {
+    validateCreateDayCommand(command)
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    const { runId, actor, expectedRevision, payload } = snapshot
+    return this.#store.createDay(snapshot, JSON.stringify([
+      'create-day', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.date, payload.mentorName,
+    ]))
   }
 
   newDayDraftCommand(actor: Actor, selection: Selection, expectedRevision: number, changes: DayChanges): SaveDayDraftCommand {

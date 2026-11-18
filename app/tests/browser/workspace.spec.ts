@@ -154,6 +154,15 @@ test('fastlåst logodekoding avsluttes med ressursfeil og nytt forsøk', async (
   await expect(page.getByRole('button', { name: 'Opprett løp' })).toBeVisible()
 })
 
+test('sperrer registrering ved engangs fontfeil og klargjør PDF-ressursene igjen', async ({ page }) => {
+  await page.route('**/assets/NotoSans-Bold*.ttf', route => route.abort(), { times: 1 })
+  await page.goto('/')
+  await expect(page.getByRole('alert')).toContainText('Appens ressurser kunne ikke lastes')
+  await expect(page.getByRole('button', { name: 'Opprett løp' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Prøv igjen' }).click()
+  await expect(page.getByRole('button', { name: 'Opprett løp' })).toBeVisible()
+})
+
 test('mangelliste og tastaturfokus knyttes til felt og beholder innskrevet tekst', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Opprett løp' }).focus()

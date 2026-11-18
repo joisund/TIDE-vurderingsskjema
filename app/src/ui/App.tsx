@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
+import type { DownloadRunPdf } from '../application/run-pdf.ts'
 import type { DayField } from '../domain/day-draft.ts'
 import type { ClosureIssue } from '../domain/closure.ts'
 import { availableExtraDays } from '../domain/follow-up.ts'
@@ -23,6 +24,7 @@ type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | DayScreen
 type RoleRestore = 'checking' | 'read-error' | 'local-draft'
 type Props = {
   application: RunApplication
+  downloadRunPdf: DownloadRunPdf
   logo: string
   prepare: () => Promise<WorkspaceView>
   requestPersistence: () => Promise<boolean>
@@ -48,7 +50,7 @@ const headings: Record<Screen, string> = {
   closure: 'Avslutt perioden',
 }
 
-export function App({ application, logo, prepare, requestPersistence, report }: Props) {
+export function App({ application, downloadRunPdf, logo, prepare, requestPersistence, report }: Props) {
   const [screen, setScreen] = useState<Screen>('loading')
   const [view, setView] = useState<WorkspaceView>()
   const [startupIssue, setStartupIssue] = useState('')
@@ -695,7 +697,8 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
         )}
         {screen === 'history' && selected && view && !roleRestore && (
           <>
-            {selected.closed ? <ClosedHistory key={`${view.actor.id}/${selected.id}`} day={{ ...selected, closed: selected.closed }} /> : (
+            {selected.closed ? <ClosedHistory key={`${view.actor.id}/${selected.id}`} day={{ ...selected, closed: selected.closed }}
+              busy={busy} downloadRunPdf={downloadRunPdf} report={report} /> : (
               <>
                 <p>Planlagt siste dag · Dag {selected.plannedLastDay}</p>
                 <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id, 'history')} />

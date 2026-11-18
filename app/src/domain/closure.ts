@@ -1,4 +1,4 @@
-import { validateSavedBaseline } from './baseline.ts'
+import { AnswerSetError, validateSavedBaseline } from './baseline.ts'
 import { dayFields } from './day-draft.ts'
 import type { DayField } from './day-draft.ts'
 import { validateSavedDriverDays } from './driver-day.ts'
@@ -31,6 +31,15 @@ export type ClosureIssue = {
   dayNumber?: number
   message: string
 } & ({ section: 'session'; field: DayField } | { section: 'days' | 'baseline' | 'after' | 'mentor' | 'history' })
+
+export class ClosureSnapshotError extends AppError {
+  readonly detail: string
+
+  constructor(detail: string) {
+    super('storage_read')
+    this.detail = detail
+  }
+}
 
 function validStatus(value: unknown): value is ConclusionStatus {
   return value === 'approved' || value === 'follow_up_needed'
@@ -127,27 +136,51 @@ export function saveConclusion(run: Run, command: SaveConclusionCommand): Run {
 
 // Samme kontroll brukes før lagring og før senere eksport av den frosne dokumentkilden.
 export function validateClosureSnapshot(snapshot: ClosureSnapshot): void {
-  if (snapshot?.documentVersion !== 1 || snapshot.pdfLayoutVersion !== 1
-    || !snapshot.history?.baseline || !snapshot.history.baselineConfirmation
-    || !isConfirmation(snapshot.closedBy, 'fadder') || !validStatus(snapshot.conclusion?.status)
-    || typeof snapshot.conclusion.text !== 'string') throw new AppError('storage_read')
+  if (snapshot?.documentVersion !== 1) throw new ClosureSnapshotError('Dokumentversjonen støttes ikke.')
+  if (snapshot.pdfLayoutVersion !== 1) throw new ClosureSnapshotError('PDF-oppsettet for dette løpet støttes ikke.')
+  if (!snapshot.history?.baseline) throw new ClosureSnapshotError('Den frosne førvurderingen mangler.')
+  if (!snapshot.history.baselineConfirmation) throw new ClosureSnapshotError('Bekreftelsen av førvurderingen mangler.')
+  if (!isConfirmation(snapshot.closedBy, 'fadder')) throw new ClosureSnapshotError('Avsluttende fadder eller avslutningstid mangler eller er ugyldig.')
+  if (!validStatus(snapshot.conclusion?.status) || typeof snapshot.conclusion.text !== 'string') {
+    throw new ClosureSnapshotError('Avslutningsvalget eller konklusjonsfeltet mangler eller er ugyldig.')
+  }
   const run = { ...snapshot.history, lifecycle: 'closed' as const }
-  validateSavedRun(run)
-  validateSavedBaseline(run)
-  validateSavedPlan(run)
-  validateSavedDriverDays(run)
-  validateSavedMentorDays(run)
+  checkDocumentSection(run, 'Løpsidentitet, øktopplysninger eller bekreftelser er ugyldige.', validateSavedRun)
 
   const days = runDays(run)
-  let positions = snapshot.history.baseline.answers.length
   if (snapshot.history.baselineConfirmation.actor.name !== run.firstDay.driverIdentity?.name) {
-    throw new AppError('storage_read')
+    throw new ClosureSnapshotError('Sjåførens navn i førbekreftelsen samsvarer ikke med første dag.')
   }
   for (const day of days) {
-    if (!dayMatchesConfirmations(day)) throw new AppError('storage_read')
-    positions += day.driverAfterAnswers!.length + day.mentorDay!.answers.length
+    const dayLabel = `Dag ${day.number}`
+    if (!day.driverConfirmation) throw new ClosureSnapshotError(`${dayLabel} mangler sjåførens etterbekreftelse.`)
+    if (!day.mentorConfirmation) throw new ClosureSnapshotError(`${dayLabel} mangler fadderens bekreftelse.`)
+    if (!day.driverAfterAnswers || !day.driverEvaluation) {
+      throw new ClosureSnapshotError(`${dayLabel} mangler ettervurderingen eller egenevalueringens registrerte tilstand.`)
+    }
+    if (!day.mentorDay) throw new ClosureSnapshotError(`${dayLabel} mangler faddervurderingen.`)
+    if (!dayMatchesConfirmations(day)) throw new ClosureSnapshotError(`${dayLabel} har ufullstendige øktopplysninger eller bekreftelser.`)
   }
-  if (!days.length || positions !== 22 + 44 * days.length) throw new AppError('storage_read')
+  checkDocumentSection(run, 'Førvurderingen eller videreføringen på dag 1 har ugyldige vurderingspunkter.', validateSavedBaseline)
+  checkDocumentSection(run, 'Oppfølgingsvalg eller planhistorikk mangler eller er ugyldige.', validateSavedPlan)
+  checkDocumentSection(run, 'Sjåførens ettervurderinger eller egenevalueringer er ufullstendige eller ugyldige.', validateSavedDriverDays)
+  checkDocumentSection(run, 'Faddervurderinger, relevansavgjørelser eller obligatoriske øktfelt er ufullstendige eller ugyldige.', validateSavedMentorDays)
+  const positions = days.reduce((total, day) => total + day.driverAfterAnswers!.length + day.mentorDay!.answers.length,
+    snapshot.history.baseline.answers.length)
+  if (positions !== 22 + 44 * days.length) throw new ClosureSnapshotError('Dokumentet mangler vurderingsposisjoner.')
+}
+
+function checkDocumentSection(run: Run, message: string, validate: (run: Run) => void) {
+  try {
+    validate(run)
+  } catch (error) {
+    if (error instanceof AnswerSetError) {
+      const phase = { before: 'Førvurderingen', driver_after: 'Ettervurderingen', mentor: 'Faddervurderingen' }[error.phase]
+      const day = runDays(run).find(item => item.id === error.parentId)
+      throw new ClosureSnapshotError(`${phase}${day ? ` på dag ${day.number}` : ''}. ${error.detail}`)
+    }
+    throw new ClosureSnapshotError(message)
+  }
 }
 
 export function validateSavedClosure(run: Run): void {
@@ -159,12 +192,12 @@ export function validateSavedClosure(run: Run): void {
   }
   const snapshot = run.closureSnapshot
   if (!snapshot || snapshot.history?.id !== run.id || snapshot.history.revision !== run.revision
-    || run.conclusionDraft !== undefined) throw new AppError('storage_read')
+    || run.conclusionDraft !== undefined) throw new ClosureSnapshotError('Den frosne dokumentkilden mangler eller samsvarer ikke med løpet.')
   validateClosureSnapshot(snapshot)
   const days = runDays(run)
   const frozenDays = runDays({ ...snapshot.history, lifecycle: 'closed' })
   if (days.length !== frozenDays.length || days.some((day, index) => day.id !== frozenDays[index].id)) {
-    throw new AppError('storage_read')
+    throw new ClosureSnapshotError('Registrerte dager i dokumentkilden samsvarer ikke med løpet.')
   }
 }
 

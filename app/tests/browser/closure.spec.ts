@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { approvedContent } from '../../src/content/approved-content.ts'
@@ -42,23 +43,30 @@ function command(run: Run, actor: Actor) {
   return { commandId: crypto.randomUUID(), runId: run.id, expectedRevision: run.revision, actor }
 }
 
-async function seedCompletedRun(page: Page) {
+async function seedCompletedRun(page: Page, pdfProof = false) {
   await createRun(page)
   const driver: Actor = { id: crypto.randomUUID(), role: 'sjåfør' }
   const mentor: Actor = { id: crypto.randomUUID(), role: 'fadder' }
   const confirmedAt = '2026-11-18T15:00:00.000Z'
   const answers = Object.fromEntries(approvedContent.criteria.map(({ id }) => [id, { value: 'ok' as const, reason: null }]))
+  const item = approvedContent.criteria[0].id
   let run = lockedRun(await readSavedRun(page))
   const dayId = run.firstDay.id
   run = updateDayDraft(run, { ...command(run, mentor), payload: {
     dayId, changes: { bus1: 'DEMO-BUSS', routes: '21', startTime: '08:00', endTime: '15:00' },
   } })
   run = updateDriverDayDraft(run, { ...command(run, driver), payload: {
-    dayId, planRevision: 1, changes: { answers, evaluation: { decision: 'submitted', texts: { strength1: 'Egen styrke' } } },
+    dayId, planRevision: 1, changes: {
+      answers: pdfProof ? { ...answers, [item]: { value: 'needs_improvement', reason: null } } : answers,
+      evaluation: { decision: 'submitted', texts: { strength1: 'Egen styrke' } },
+    },
   } })
   run = confirmDriverDay(run, { ...command(run, driver), payload: { dayId, planRevision: 1, confirmedAt } })
   run = updateMentorDay(run, { ...command(run, mentor), payload: {
-    dayId, changes: { answers, comments: { [approvedContent.criteria[0].id]: 'Historisk fadderkommentar' } },
+    dayId, changes: {
+      answers: pdfProof ? { ...answers, [item]: { value: 'not_relevant', reason: 'Ingen uniformskontroll' } } : answers,
+      comments: { [item]: pdfProof ? 'Langkommentar begynner.\n' + 'Überføring'.repeat(1000) + '\nSluttmerke ÆØÅ åäö?' : 'Historisk fadderkommentar' },
+    },
   } })
   run = saveFollowUp(run, { ...command(run, mentor), payload: { dayId, source: 'daily', choice: { kind: 'training' } } })
   run = confirmMentorDay(run, { ...command(run, mentor), payload: { dayId, confirmedAt } })
@@ -212,6 +220,124 @@ test('foreldet modal godtar ingen ny konklusjon og henter lukking fra annen fane
   await expect(fullHistory(page)).toBeFocused()
   await expect(page.getByText('Oppfølgingsbehov', { exact: true })).toBeVisible()
   expect((await readSavedRun(page)).closureSnapshot?.conclusion.text).toBe('')
+})
+
+test('PDF-avbrudd ved rollebytte og nytt forsøk bevarer den kvitterte avslutningen', async ({ page }) => {
+  await page.addInitScript(() => {
+    const held = new WeakSet<IDBTransaction>()
+    const get = IDBObjectStore.prototype.get
+    IDBObjectStore.prototype.get = function (key) {
+      if (this.name === 'runs' && this.transaction.mode === 'readonly' && Reflect.get(window, 'holdPdfRead')) {
+        Reflect.set(window, 'holdPdfRead', false)
+        held.add(this.transaction)
+      }
+      return get.call(this, key)
+    }
+    const complete = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete')!
+    Object.defineProperty(IDBTransaction.prototype, 'oncomplete', {
+      ...complete,
+      set(this: IDBTransaction, callback: (event: Event) => void) {
+        complete.set!.call(this, (event: Event) => {
+          if (held.has(this)) Reflect.set(window, 'releasePdfRead', () => callback.call(this, event))
+          else callback.call(this, event)
+        })
+      },
+    })
+  })
+  await seedCompletedRun(page)
+  const download = page.getByRole('button', { name: 'Last ned PDF', exact: true })
+  await page.getByRole('button', { name: 'Åpne historikk' }).click()
+  await expect(download).toHaveCount(0)
+  await back(page).click()
+  await openClosure(page).click()
+  await outcome(page, 'Oppfølgingsbehov').check()
+  await review(page).click()
+  await submit(page).click()
+  await expect(fullHistory(page)).toBeVisible()
+  const closed = await readSavedRun(page)
+  const firstButton = await download.elementHandle()
+  let downloads = 0
+  page.on('download', () => { downloads += 1 })
+  await page.evaluate(() => Reflect.set(window, 'holdPdfRead', true))
+  await download.press('Enter')
+  await expect(page.getByText('Lager PDF …')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => typeof Reflect.get(window, 'releasePdfRead'))).toBe('function')
+  await role(page).selectOption('sjåfør')
+  await expect.poll(() => firstButton.evaluate(element => element.isConnected)).toBe(false)
+  await page.evaluate(() => Reflect.get(window, 'releasePdfRead')())
+
+  await page.evaluate(() => {
+    const createObjectURL = URL.createObjectURL
+    URL.createObjectURL = blob => {
+      URL.createObjectURL = createObjectURL
+      if (blob.type === 'application/pdf') throw new Error('Simulert feil ved klargjøring av PDF')
+      return createObjectURL(blob)
+    }
+  })
+  await expect(download).toBeEnabled()
+  await download.press('Enter')
+  await expect(page.getByRole('alert')).toContainText('PDF-en kunne ikke opprettes.')
+  expect(downloads).toBe(0)
+  const retry = page.getByRole('button', { name: 'Prøv å laste ned PDF igjen' })
+  await expect(retry).toBeFocused()
+  const [file] = await Promise.all([page.waitForEvent('download'), retry.press('Enter')])
+  expect(file.suggestedFilename()).toMatch(/\.pdf$/i)
+  expect(await file.failure()).toBeNull()
+  expect((await readFile(await file.path())).subarray(0, 5).toString()).toBe('%PDF-')
+  expect(downloads).toBe(1)
+  expect(await readSavedRun(page)).toEqual(closed)
+})
+
+test('PDF-feil identifiserer korrupt dokument i historikk og ved oppstart', async ({ page }) => {
+  await seedCompletedRun(page)
+  await openClosure(page).click()
+  await outcome(page, 'Godkjent').check()
+  await review(page).click()
+  await submit(page).click()
+  await expect(fullHistory(page)).toBeVisible()
+  const closed = await readSavedRun(page)
+  const corrupted = structuredClone(closed)
+  const answers = corrupted.closureSnapshot!.history.baseline.answers
+  answers[1] = answers[0]
+  await writeSavedRun(page, corrupted)
+  const download = page.getByRole('button', { name: 'Last ned PDF', exact: true })
+  await download.click()
+  await expect(page.getByRole('alert')).toContainText('Punkt 1 er registrert flere ganger.')
+  await expect(fullHistory(page)).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('alert')).toContainText('Punkt 1 er registrert flere ganger.')
+  await expect(download).toHaveCount(0)
+  await writeSavedRun(page, closed)
+  await page.getByRole('button', { name: 'Prøv igjen' }).click()
+  await page.getByRole('button', { name: 'Åpne hele skjemaet' }).click()
+  await expect(fullHistory(page)).toBeVisible()
+  expect(await readSavedRun(page)).toEqual(closed)
+})
+
+test('PDF melder tegn uten skriftstøtte eller matrise uten plass og bevarer historikken', async ({ page }) => {
+  await seedCompletedRun(page)
+  await openClosure(page).click()
+  await outcome(page, 'Godkjent').check()
+  const original = 'ABCDE李😀↔FGHI'
+  await text(page).fill(original)
+  await review(page).click()
+  await submit(page).click()
+  await expect(fullHistory(page)).toBeVisible()
+  await page.getByRole('button', { name: 'Last ned PDF', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('U+674E, U+1F600, U+2194')
+  await expect(page.getByText(original, { exact: true })).toBeVisible()
+  const closed = await readSavedRun(page)
+  expect(closed.closureSnapshot?.conclusion.text).toBe(original)
+
+  const oversized = structuredClone(closed)
+  const snapshot = oversized.closureSnapshot!
+  oversized.closureSnapshot = { ...snapshot, conclusion: { ...snapshot.conclusion, text: '' } }
+  snapshot.history.content.criteria[0].title = 'Umulig korrupt matrise '.repeat(200)
+  await writeSavedRun(page, oversized)
+  await page.getByRole('button', { name: 'Prøv å laste ned PDF igjen' }).click()
+  await expect(page.getByRole('alert')).toContainText('vurderingspunkt 1 får ikke plass i A4-matrisen')
+  await expect(fullHistory(page)).toBeVisible()
+  expect(await readSavedRun(page)).toEqual(oversized)
 })
 
 test('senere uferdig dag leder til riktig øktfelt fra dag 1 og låst avvik kan leses', async ({ page }) => {
@@ -369,10 +495,12 @@ test('gjenopptakelse beholder ulagret oppsummering separat fra lukking i en anne
   await expect(page.locator('main')).not.toContainText('Lokalt ulagret notat')
 })
 
-test('lastet app avslutter lokalt etter 60 sekunders nettbrudd og åpner lagret skjema på nytt', async ({ page, context }) => {
+test('lastet app avslutter og laster ned lokal PDF etter 60 sekunders nettbrudd', async ({ page, context }, testInfo) => {
   test.setTimeout(90_000)
-  await seedCompletedRun(page)
+  await seedCompletedRun(page, true)
   await openClosure(page).click()
+  const requests: string[] = []
+  page.on('request', request => { if (/^https?:/.test(request.url())) requests.push(request.url()) })
   await context.setOffline(true)
   const started = performance.now()
   await expect(page.getByText('Uten nett', { exact: true })).toBeVisible()
@@ -383,7 +511,18 @@ test('lastet app avslutter lokalt etter 60 sekunders nettbrudd og åpner lagret 
   await page.waitForTimeout(Math.max(0, 60_000 - (performance.now() - started)))
   await submit(page).click()
   await expect(fullHistory(page)).toBeVisible()
-  expect((await readSavedRun(page)).closureSnapshot?.conclusion.text).toBe('Lokal avslutning under nettbrudd')
+  const closed = await readSavedRun(page)
+  expect(closed.closureSnapshot?.conclusion.text).toBe('Lokal avslutning under nettbrudd')
+  const [file] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Last ned PDF', exact: true }).click(),
+  ])
+  const artifact = testInfo.outputPath('eksport.pdf')
+  await file.saveAs(artifact)
+  expect((await readFile(artifact)).subarray(0, 5).toString()).toBe('%PDF-')
+  expect(requests).toEqual([])
+  expect(await readSavedRun(page)).toEqual(closed)
+  await writeFile(testInfo.outputPath('frosset-kilde.json'), JSON.stringify(closed, null, 2))
   await context.setOffline(false)
   const reopened = await context.newPage()
   await reopened.goto('/')

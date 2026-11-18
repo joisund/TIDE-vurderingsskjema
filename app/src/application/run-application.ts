@@ -20,7 +20,9 @@ import {
 import type { ConfirmMentorDayCommand, MentorDayChanges, MentorDayReceipt, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 import { dailyFollowUp, followUpWindow, runStatus, validateFollowUpCommand } from '../domain/follow-up.ts'
 import type { FollowUpChoice, SaveFollowUpCommand } from '../domain/follow-up.ts'
-import { checkClosureDays, conclusionDraft, validateCloseRunCommand, validateSaveConclusionCommand } from '../domain/closure.ts'
+import {
+  checkClosureDays, conclusionDraft, validateCloseRunCommand, validateSavedClosure, validateSaveConclusionCommand,
+} from '../domain/closure.ts'
 import type { CloseRunCommand, ConclusionDraft, ConclusionStatus, SaveConclusionCommand } from '../domain/closure.ts'
 
 function historicalRun(run: Run): Run {
@@ -489,11 +491,10 @@ export class RunApplication {
   }
 
   async readClosureSnapshot(runId: string) {
-    const { runs } = await this.#store.read()
-    const run = runs.find(item => item.id === runId)
-    if (!run) throw new AppError('run_missing')
-    if (run.lifecycle !== 'closed' || !run.closureSnapshot) throw new AppError('locked')
-    return run.closureSnapshot
+    const run = await this.#store.readRun(runId)
+    if (run.lifecycle !== 'closed') throw new AppError('locked')
+    validateSavedClosure(run)
+    return run.closureSnapshot!
   }
 
   async read(selection?: Selection) {

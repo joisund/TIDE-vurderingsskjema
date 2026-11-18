@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { DATABASE_NAME, IndexedDbRunStore, SCHEMA_VERSION } from '../src/adapters/indexeddb/run-store.ts'
 import { RunApplication } from '../src/application/run-application.ts'
+import { createRunPdfDownload } from '../src/application/run-pdf.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
 import { baselineOf } from '../src/domain/baseline.ts'
 import { createDay } from '../src/domain/create-day.ts'
@@ -187,6 +188,13 @@ test('fullfører 1, 2, 3 og 5 dager med eksakt dekning og separate historiske be
   for (const [plan, length] of [['1', 1], ['2', 2], ['3', 3], ['3', 5]] as const) {
     const { app, store } = await finishRun(plan, length)
     const raw = (await store.read()).runs[0]
+    const rendered: unknown[] = []
+    const exportPdf = createRunPdfDownload(app, async source => {
+      rendered.push(source)
+      return new Blob(['%PDF-1.3'], { type: 'application/pdf' })
+    })
+    await assert.rejects(exportPdf(raw.id), { code: 'locked' })
+    assert.equal(rendered.length, 0)
     const { actor, selected } = await app.read()
     assert.equal(raw.lifecycle, 'open')
     assert.equal(selected?.status, length === 5 ? 'Under oppfølging' : 'Pågående')
@@ -235,6 +243,12 @@ test('fullfører 1, 2, 3 og 5 dager med eksakt dekning og separate historiske be
     const mentorClosed = (await app.read()).selected!
     const driverClosed = (await app.changeRole('sjåfør')).selected!
     assert.equal(driverClosed.status, 'Avsluttet')
+    const download = await exportPdf(raw.id)
+    assert.equal(download.blob.type, 'application/pdf')
+    assert.ok(download.filename.endsWith('.pdf'))
+    await app.changeRole('fadder')
+    await exportPdf(raw.id)
+    assert.deepEqual(rendered, [document, document])
     assert.deepEqual(driverClosed.closed, mentorClosed.closed)
     assert.deepEqual(await app.executeCloseRun(command), closed)
     assert.equal(driverClosed.canCreateDay, false)
@@ -340,6 +354,8 @@ test('dokumentkontrollen avviser fullstendig antall med feil ID og manglende his
   const open = (await app.read()).selected!
   await app.executeCloseRun(app.newCloseRunCommand(actor, open, draft))
   const doc = await app.readClosureSnapshot(open.id)
+  const unsupported = { ...doc, pdfLayoutVersion: 2 } as unknown as typeof doc
+  assert.throws(() => validateClosureSnapshot(unsupported), { detail: 'PDF-oppsettet for dette løpet støttes ikke.' })
   const corruptions: Array<(snapshot: typeof doc) => void> = [
     ({ history }) => { history.baseline.answers[0].criterionId = 'fremmed-id' },
     ({ history }) => { history.firstDay.driverAfterAnswers![1] = history.firstDay.driverAfterAnswers![0] },
@@ -370,6 +386,8 @@ test('dokumentkontrollen avviser fullstendig antall med feil ID og manglende his
   await putRun(factory, outer)
   await assert.rejects(app.read(), { code: 'storage_read' })
   await assert.rejects(app.readClosureSnapshot(open.id), { code: 'storage_read' })
+  const exportPdf = createRunPdfDownload(app, async () => assert.fail('En ufullstendig kilde kan ikke sendes til adapteren.'))
+  await assert.rejects(exportPdf(open.id), { detail: 'Førvurderingen. Svarsettet inneholder et fremmed vurderingspunkt.' })
 })
 
 function openDatabase(factory: IDBFactory, version?: number, onUpgrade?: (db: IDBDatabase) => void) {

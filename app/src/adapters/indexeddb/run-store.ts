@@ -276,6 +276,17 @@ export class IndexedDbRunStore implements RunStore {
     })
   }
 
+  readRun(runId: string): Promise<Run> {
+    return this.#withDatabase([META, RUNS], 'readonly', operations => {
+      operations.get<SavedRun>(RUNS, runId, record => {
+        if (!record) throw new AppError('run_missing')
+        const run = readRun(record)
+        if (run.id !== runId) throw new AppError('storage_read')
+        operations.finish(run)
+      })
+    })
+  }
+
   select(runId: string, dayId?: string): Promise<WorkspaceState> {
     return this.#withDatabase([META, RUNS], 'readwrite', operations => {
       loadSession(operations, session => {

@@ -27,6 +27,7 @@ export interface RunStore {
   saveConclusion(command: SaveConclusionCommand, fingerprint: string): Promise<RunReceipt>
   closeRun(command: CloseRunCommand, fingerprint: string): Promise<RunReceipt>
   read(selection?: Selection): Promise<WorkspaceState>
+  readRun(runId: string): Promise<Run>
   select(runId: string, dayId?: string): Promise<WorkspaceState>
   changeRole(role: Role, selection?: Selection): Promise<WorkspaceState>
 }

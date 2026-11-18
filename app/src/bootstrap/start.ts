@@ -1,5 +1,7 @@
 import { IndexedDbRunStore, SCHEMA_VERSION } from '../adapters/indexeddb/run-store.ts'
+import { preparePdfResources, renderClosurePdf } from '../adapters/pdf/renderer.tsx'
 import { RunApplication } from '../application/run-application.ts'
+import { createRunPdfDownload } from '../application/run-pdf.ts'
 import logo from '../assets/tide-logo-rgb.png'
 import { approvedContent } from '../content/approved-content.ts'
 import { AppError } from '../domain/run.ts'
@@ -16,6 +18,7 @@ function browserStorage(): IDBFactory | undefined {
 }
 
 const application = new RunApplication(new IndexedDbRunStore(browserStorage()), approvedContent, () => crypto.randomUUID())
+const downloadRunPdf = createRunPdfDownload(application, renderClosurePdf)
 let stylesheetLoads = 0
 
 function stylesReady() {
@@ -25,6 +28,7 @@ function stylesReady() {
 async function loadResources() {
   let link: HTMLLinkElement | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
+  const pdf = new AbortController()
   try {
     const styles = stylesReady() ? undefined : new Promise<void>((resolve, reject) => {
       link = document.createElement('link')
@@ -41,13 +45,19 @@ async function loadResources() {
     const image = new Image()
     image.src = logo
     await Promise.race([
-      Promise.all([styles, image.decode()]),
-      new Promise<never>((_, reject) => { timeout = setTimeout(reject, 5000) }),
+      Promise.all([styles, image.decode(), preparePdfResources(pdf.signal)]),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          pdf.abort()
+          reject(new AppError('resource_load'))
+        }, 5000)
+      }),
     ])
   } catch {
     if (!stylesReady()) link?.remove()
     throw new AppError('resource_load')
   } finally {
+    pdf.abort()
     clearTimeout(timeout)
     if (link) {
       link.onload = null
@@ -75,4 +85,4 @@ function report(error: unknown) {
   console.warn('Tide', { code: error instanceof AppError ? error.code : 'unexpected', build: __APP_BUILD__, schema: SCHEMA_VERSION })
 }
 
-export const app = { application, logo, prepare, requestPersistence, report }
+export const app = { application, downloadRunPdf, logo, prepare, requestPersistence, report }

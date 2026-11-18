@@ -1,4 +1,5 @@
 import { AppError } from '../domain/run.ts'
+import { ClosureSnapshotError } from '../domain/closure.ts'
 import type { ErrorCode } from '../domain/run.ts'
 
 const messages: Record<ErrorCode, string> = {
@@ -25,6 +26,7 @@ const messages: Record<ErrorCode, string> = {
 }
 
 export function explain(error: unknown) {
+  if (error instanceof ClosureSnapshotError) return `Det lagrede dokumentgrunnlaget kunne ikke leses. ${error.detail}`
   return messages[error instanceof AppError ? error.code : 'storage_open']
 }
 

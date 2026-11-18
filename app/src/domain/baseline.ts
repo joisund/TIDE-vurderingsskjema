@@ -67,16 +67,38 @@ function isInheritedAnswer(answer: AssessmentAnswer, source?: Answer) {
     && answer.inheritedFrom === source.id && answer.value === source.value && answer.reason === source.reason
 }
 
-export function validateAnswerSet(run: Run, answers: Answer[], phase: Answer['phase'], parentId: string) {
-  if (!Array.isArray(answers)) throw new AppError('storage_read')
-  const expected = new Set(run.content.criteria.map(criterion => criterion.id))
-  for (const answer of answers) {
-    const expectedId = answerId(parentId, phase, answer?.criterionId)
-    if (!expected.delete(answer?.criterionId) || answer.id !== expectedId || answer.phase !== phase
-      || !Number.isSafeInteger(answer.answerRevision) || answer.answerRevision < 0 || answer.answerRevision > run.revision
-      || (answer.value !== null && answer.answerRevision === 0)) throw new AppError('storage_read')
+export class AnswerSetError extends AppError {
+  readonly phase: Answer['phase']
+  readonly parentId: string
+  readonly detail: string
+
+  constructor(phase: Answer['phase'], parentId: string, detail: string) {
+    super('storage_read')
+    this.phase = phase
+    this.parentId = parentId
+    this.detail = detail
   }
-  if (expected.size) throw new AppError('storage_read')
+}
+
+export function validateAnswerSet(run: Run, answers: Answer[], phase: Answer['phase'], parentId: string) {
+  if (!Array.isArray(answers)) throw new AnswerSetError(phase, parentId, 'Svarsettet mangler.')
+  const ids = run.content.criteria.map(criterion => criterion.id)
+  const expected = new Set(ids)
+  for (const answer of answers) {
+    const criterionId = answer?.criterionId
+    const number = ids.indexOf(criterionId) + 1
+    if (!number) throw new AnswerSetError(phase, parentId, 'Svarsettet inneholder et fremmed vurderingspunkt.')
+    if (!expected.delete(criterionId)) throw new AnswerSetError(phase, parentId, `Punkt ${number} er registrert flere ganger.`)
+    if (answer.id !== answerId(parentId, phase, criterionId) || answer.phase !== phase
+      || !Number.isSafeInteger(answer.answerRevision) || answer.answerRevision < 0 || answer.answerRevision > run.revision
+      || (answer.value !== null && answer.answerRevision === 0)) {
+      throw new AnswerSetError(phase, parentId, `Punkt ${number} har ugyldig svar-ID, fase eller revisjon.`)
+    }
+  }
+  if (expected.size) {
+    const missing = ids.flatMap((id, index) => expected.has(id) ? [index + 1] : []).join(', ')
+    throw new AnswerSetError(phase, parentId, `Manglende svarposisjoner ved punkt ${missing}.`)
+  }
 }
 
 export function validReasonDrafts(answers: readonly Answer[], drafts: unknown): boolean {

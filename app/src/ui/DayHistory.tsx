@@ -1,10 +1,12 @@
 import type { DayView, HistoryDay } from '../application/run-application.ts'
+import type { DownloadRunPdf } from '../application/run-pdf.ts'
 import type { Answer } from '../domain/baseline.ts'
 import { evaluationFields } from '../domain/driver-day.ts'
 import type { Confirmation } from '../domain/run.ts'
 import { CalendarDate, ConfirmationTime } from './CalendarDate.tsx'
 import { FollowUpText, PlanHistory } from './FollowUpForm.tsx'
 import { answerLabels, conclusionLabels, evaluationLabels } from './assessment-fields.ts'
+import { RunPdfDownload } from './RunPdfDownload.tsx'
 
 export function DayTimeline({ day, busy, onSelect }: { day: DayView; busy: boolean; onSelect: (id: string) => void }) {
   return (
@@ -168,7 +170,12 @@ export function DayHistory({ day, full = false }: { day: HistoryDay; full?: bool
   )
 }
 
-export function ClosedHistory({ day }: { day: DayView & { closed: NonNullable<DayView['closed']> } }) {
+export function ClosedHistory({ day, busy, downloadRunPdf, report }: {
+  day: DayView & { closed: NonNullable<DayView['closed']> }
+  busy: boolean
+  downloadRunPdf: DownloadRunPdf
+  report: (error: unknown) => void
+}) {
   const { closed, baseline } = day
   const beforeAnswers = new Map(baseline.answers.map(answer => [answer.criterionId, answer]))
   return (
@@ -180,6 +187,7 @@ export function ClosedHistory({ day }: { day: DayView & { closed: NonNullable<Da
         {closed.conclusion.text && <p className="assessment-text">{closed.conclusion.text}</p>}
         <p>Avsluttet av {closed.closedBy.actor.name}, fadder · <ConfirmationTime value={closed.closedBy.confirmedAt} /></p>
         <p>Hele skjemaet er tilgjengelig for sjåføren og fadderen.</p>
+        <RunPdfDownload runId={day.id} busy={busy} downloadRunPdf={downloadRunPdf} report={report} />
       </section>
       <section className="baseline-entry" aria-labelledby="closed-plan-heading">
         <h2 id="closed-plan-heading">Oppfølgingsplan</h2>

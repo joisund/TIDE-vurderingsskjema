@@ -1,20 +1,10 @@
 import { availableExtraDays } from '../domain/follow-up.ts'
 import type { FollowUpChoice, FollowUpInput, PlanEvent, previewFollowUp } from '../domain/follow-up.ts'
+import { followUpText, training } from '../content/assessment-labels.ts'
 import type { DayView } from '../application/run-application.ts'
 import { focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import type { MentorView } from './use-mentor-draft.ts'
-
-const training = 'Utvidet kjøretrening før fadderkjøring fortsetter'
-
-function followUpText(choice?: FollowUpChoice) {
-  switch (choice?.kind) {
-    case 'none': return 'Nei'
-    case 'training': return `Ja · ${training}`
-    case 'days': return `Ja · ${choice.extraDays} ekstra ${choice.extraDays === 1 ? 'fadderdag' : 'fadderdager'}`
-    default: return 'Ubesvart'
-  }
-}
 
 export function FollowUpText({ choice }: { choice?: FollowUpChoice }) {
   return <>{followUpText(choice)}</>

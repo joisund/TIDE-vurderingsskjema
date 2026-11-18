@@ -34,7 +34,8 @@ type Props = {
 const evaluationChoice = { submitted: 'Innsending', skipped: 'Hoppet over' }
 
 function hasDriverDayIssues(day: DayView) {
-  const issues = { ...checkDayFields(day.fields, 'driver'), ...checkBaselineAnswers(day.driverAfter!.answers) }
+  const answers = checkBaselineAnswers(day.driverAfter!.answers, day.day === 1 ? day.baseline.answers : undefined)
+  const issues = { ...checkDayFields(day.fields, 'driver'), ...answers }
   return Object.keys(issues).length > 0
 }
 
@@ -90,7 +91,8 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
   const reasonField = useRef<HTMLTextAreaElement>(null)
   const canEdit = assessment.editable && !conflict
   const blockEdits = checking || navigating || hasUnresolvedConfirmation
-  const answerIssues = checkBaselineAnswers(assessment.answers.map(answer => ({ ...answer, ...rows[answer.criterionId] })))
+  const answerIssues = checkBaselineAnswers(assessment.answers.map(answer => ({ ...answer, ...rows[answer.criterionId] })),
+    after && saved.day === 1 ? saved.baseline.answers : undefined)
   const dayIssues = checkDayFields(assessment.fields, 'driver')
   const issues = Object.keys(answerIssues).length + Object.keys(dayIssues).length
   const evaluation = saved.driverAfter?.evaluation

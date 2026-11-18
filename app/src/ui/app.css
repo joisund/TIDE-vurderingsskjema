@@ -338,8 +338,8 @@ button.matrix-choice { cursor: pointer; }
 
 .follow-up h2 { margin-bottom: 8px; }
 .follow-up-fields, .follow-up fieldset { display: grid; gap: 8px; }
-.follow-up fieldset { min-inline-size: 0; border: 0; padding: 0; margin: 12px 0 0; }
-.follow-up legend { font-size: .875rem; font-weight: 650; padding: 0; }
+.follow-up fieldset, .conclusion-options { min-inline-size: 0; border: 0; padding: 0; margin: 12px 0 0; }
+.follow-up legend, .conclusion-options legend { font-size: .875rem; font-weight: 650; padding: 0; }
 .follow-up-option { display: flex; align-items: center; gap: 12px; min-height: 48px; cursor: pointer; }
 .follow-up-option input {
   flex: none;
@@ -387,7 +387,7 @@ button.matrix-choice { cursor: pointer; }
 .assessment-dialog h2 + p, .assessment-dialog p + p { margin-top: 8px; }
 .assessment-dialog .actions { margin-top: 22px; }
 .assessment-dialog button { white-space: normal; overflow-wrap: anywhere; }
-.assessment-dialog textarea, .evaluation-fields textarea, .mentor-comment textarea {
+.assessment-dialog textarea, .evaluation-fields textarea, .mentor-comment textarea, .conclusion-text textarea {
   width: 100%;
   min-height: 108px;
   margin: 8px 0 10px;
@@ -398,7 +398,7 @@ button.matrix-choice { cursor: pointer; }
   line-height: 1.5;
   resize: vertical;
 }
-.evaluation-fields textarea, .mentor-comment textarea { display: block; font-size: 1rem; font-weight: 400; }
+.evaluation-fields textarea, .mentor-comment textarea, .conclusion-text textarea { display: block; font-size: 1rem; font-weight: 400; }
 .assessment-dialog textarea[aria-invalid='true'] { border: 2px solid var(--primary); }
 .dialog-context { font-size: .75rem; font-weight: 700; margin-top: 12px; }
 .dialog-criterion { font-size: .9375rem; font-weight: 650; margin-bottom: 12px; }

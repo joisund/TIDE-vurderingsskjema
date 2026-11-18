@@ -204,7 +204,8 @@ export function useAssessmentDraft({ initial, phase, actor, application, report,
       if (phase === 'before' && applied) saved.baseline = { ...base.baseline, ...applyBaselineChanges(base.baseline, applied) }
       if (phase === 'driver_after' && base.driverAfter) {
         const answers = applied ? applyBaselineChanges(base.driverAfter, applied) : base.driverAfter
-        const offeredAndComplete = base.driverAfter.evaluationOffered && !Object.keys(checkBaselineAnswers(answers.answers)).length
+        const issues = checkBaselineAnswers(answers.answers, base.day === 1 ? base.baseline.answers : undefined)
+        const offeredAndComplete = base.driverAfter.evaluationOffered && !Object.keys(issues).length
         saved.driverAfter = {
           ...base.driverAfter, ...answers,
           ...(evaluation && { evaluationDraft: applyEvaluationChanges(base.driverAfter.evaluationDraft,
@@ -274,7 +275,8 @@ export function useAssessmentDraft({ initial, phase, actor, application, report,
       const planChanged = stored.selected.planRevision !== state.saved.planRevision
       const offered = latest.saved.driverAfter?.evaluationOffered
       const complete = Object.keys(checkBaselineAnswers(assessmentOf(latest.saved, phase).answers
-        .map(answer => ({ ...answer, ...rows[answer.criterionId] })))).length === 0
+        .map(answer => ({ ...answer, ...rows[answer.criterionId] })),
+      phase === 'driver_after' && latest.saved.day === 1 ? latest.saved.baseline.answers : undefined)).length === 0
       publish({
         ...latest, rows,
         ...(phase === 'driver_after' && {

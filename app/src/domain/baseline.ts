@@ -1,5 +1,5 @@
 import { checkDayFields, dayDraft } from './day-draft.ts'
-import { AppError, isConfirmationTime, isId, validateContent } from './run.ts'
+import { AppError, hasText, isConfirmationTime, isId, validateContent } from './run.ts'
 import type { Actor, Run } from './run.ts'
 import { reasonRequirement, validateReason } from './reason.ts'
 
@@ -13,6 +13,7 @@ export type Answer = AnswerContent & {
   answerRevision: number
 }
 export type DriverAfterAnswer = Answer & { locked: boolean; inheritedFrom?: string }
+type AssessmentAnswer = Answer & Partial<Pick<DriverAfterAnswer, 'locked' | 'inheritedFrom'>>
 export type BaselineDraftRow = AnswerContent & { reasonDraft?: string }
 export type BaselineChanges = Record<string, BaselineDraftRow>
 export type AnswerDraft<T extends Answer = Answer> = { answers: T[]; reasonDrafts: Partial<Record<string, string>> }
@@ -54,6 +55,18 @@ export function validAnswerContent(answer: AnswerContent) {
   return (answer.value === null || answerValues.includes(answer.value)) && answer.reason === null
 }
 
+// Låste tekster kontrolleres for dokumentdekning uten å kjøre dagens A10-regel.
+export function validRecordedAnswer(answer: AnswerContent) {
+  if (answer.value === 'not_relevant') return hasText(answer.reason)
+  return (answer.value === 'ok' || answer.value === 'needs_improvement') && answer.reason === null
+}
+
+function isInheritedAnswer(answer: AssessmentAnswer, source?: Answer) {
+  return source?.phase === 'before' && source.value === 'not_relevant'
+    && answer.phase === 'driver_after' && answer.locked === true
+    && answer.inheritedFrom === source.id && answer.value === source.value && answer.reason === source.reason
+}
+
 export function validateAnswerSet(run: Run, answers: Answer[], phase: Answer['phase'], parentId: string) {
   if (!Array.isArray(answers)) throw new AppError('storage_read')
   const expected = new Set(run.content.criteria.map(criterion => criterion.id))
@@ -82,7 +95,8 @@ export function validateSavedBaseline(run: Run) {
 
   const { answers, reasonDrafts } = baselineOf(run)
   validateAnswerSet(run, answers, 'before', run.id)
-  if (answers.some(answer => !validAnswerContent(answer)) || !validReasonDrafts(answers, reasonDrafts)) {
+  const validBefore = run.baselineConfirmation ? validRecordedAnswer : validAnswerContent
+  if (answers.some(answer => !validBefore(answer)) || !validReasonDrafts(answers, reasonDrafts)) {
     throw new AppError('storage_read')
   }
 
@@ -97,17 +111,20 @@ export function validateSavedBaseline(run: Run) {
   const before = new Map(answers.map(answer => [answer.criterionId, answer]))
   for (const answer of inheritedAnswers) {
     const source = before.get(answer.criterionId)!
-    if (!validAnswerContent(answer) || (source.value === 'not_relevant'
-      ? !(answer.locked === true && answer.inheritedFrom === source.id && answer.value === source.value && answer.reason === source.reason)
+    const validAfter = run.firstDay.driverConfirmation || answer.locked ? validRecordedAnswer : validAnswerContent
+    if (!validAfter(answer) || (source.value === 'not_relevant'
+      ? !isInheritedAnswer(answer, source)
       : answer.locked !== false || answer.inheritedFrom !== undefined)) throw new AppError('storage_read')
   }
 }
 
-export function checkBaselineAnswers(answers: readonly Answer[]) {
+export function checkBaselineAnswers(answers: readonly AssessmentAnswer[], before?: readonly Answer[]) {
   const issues: Record<string, string> = {}
+  const sources = new Map(before?.map(answer => [answer.criterionId, answer]))
   for (const answer of answers) {
+    const validAnswer = isInheritedAnswer(answer, sources.get(answer.criterionId)) ? validRecordedAnswer : validAnswerContent
     if (answer.value === null) issues[answer.criterionId] = 'Velg et svar.'
-    else if (!validAnswerContent(answer)) issues[answer.criterionId] = reasonRequirement
+    else if (!validAnswer(answer)) issues[answer.criterionId] = reasonRequirement
   }
   return issues
 }

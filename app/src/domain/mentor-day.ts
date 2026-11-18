@@ -1,6 +1,6 @@
 import {
-  applyBaselineChanges, baselineOf, checkBaselineAnswers, emptyAnswer, firstDayCanDriveAfter, validAnswerContent, validReasonDrafts,
-  validateAnswerChanges, validateAnswerSet, validateSavedBaseline,
+  applyBaselineChanges, baselineOf, emptyAnswer, firstDayCanDriveAfter, validAnswerContent, validReasonDrafts,
+  validateAnswerChanges, validateAnswerSet, validateSavedBaseline, validRecordedAnswer,
 } from './baseline.ts'
 import type { Answer, AnswerDraft, BaselineChanges } from './baseline.ts'
 import { checkDayFields, dayDraft } from './day-draft.ts'
@@ -55,14 +55,15 @@ export function sameReviewTarget(a: ReviewTarget, b: ReviewTarget) {
 export function driverRelevance(run: Run, day: Day): Record<string, RelevanceStatus> {
   const after = firstDayCanDriveAfter(run) ? driverAfterOf(run, day).answers : []
   const reviews = day.mentorDay?.reviews
+  const validAnswer = day.driverConfirmation ? validRecordedAnswer : validAnswerContent
   return Object.fromEntries(run.content.criteria.map(({ id }): [string, RelevanceStatus] => {
     const answer = after.find(item => item.criterionId === id)
     const review = reviews?.[id]
-    if (answer?.value !== 'not_relevant' || !validAnswerContent(answer) || answer.reason === null) {
+    if (answer?.value !== 'not_relevant' || !validAnswer(answer) || answer.reason === null) {
       return [id, { state: 'not_applicable', previouslyReviewed: Boolean(review) }]
     }
     const target = { answerId: answer.id, answerRevision: answer.answerRevision }
-    if (!review || !validReview(review) || !sameReviewTarget(review, target)) {
+    if (!review || !validReview(review, Boolean(day.mentorConfirmation)) || !sameReviewTarget(review, target)) {
       return [id, { state: review ? 'outdated' : 'pending', target, reason: answer.reason }]
     }
     return [id, { state: review.decision, target, reason: answer.reason, review }]
@@ -102,8 +103,8 @@ export function checkMentorDay(run: Run, day: Day) {
   validateAnswerSet(run, before, 'before', run.id)
   validateAnswerSet(run, after, 'driver_after', day.id)
   validateAnswerSet(run, draft.answers, 'mentor', day.id)
-  const baselineMissing = !firstDayCanDriveAfter(run) || Object.keys(checkBaselineAnswers(before)).length > 0
-  const driverAfterMissing = !day.driverConfirmation || Object.keys(checkBaselineAnswers(after)).length > 0
+  const baselineMissing = !firstDayCanDriveAfter(run) || before.some(answer => !validRecordedAnswer(answer))
+  const driverAfterMissing = !day.driverConfirmation || after.some(answer => !validRecordedAnswer(answer))
   const fields = checkDayFields(dayDraft(run, day), 'day-lock')
   const assessment = mentorAssessmentIssues(draft.answers, driverRelevance(run, day), draft.reasonDrafts)
   const followUpMissing = !dailyFollowUp(run, day)
@@ -115,8 +116,9 @@ export function checkMentorDay(run: Run, day: Day) {
 
 function validateMentorAnswers(run: Run, day: Day, draft: MentorDay) {
   validateAnswerSet(run, draft.answers, 'mentor', day.id)
+  const validAnswer = day.mentorConfirmation ? validRecordedAnswer : validAnswerContent
   if (draft.answers.some((answer, index) => answer.criterionId !== run.content.criteria[index].id
-    || !validAnswerContent(answer) || (answer.value !== null && !isMentorActor(answer.actor))
+    || !validAnswer(answer) || (answer.value !== null && !isMentorActor(answer.actor))
     || (answer.actor !== undefined && !isMentorActor(answer.actor)))
     || !validReasonDrafts(draft.answers, draft.reasonDrafts)) throw new AppError('storage_read')
 }
@@ -129,10 +131,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
-function validReview(review: ReviewInput) {
+function validReview(review: ReviewInput, locked = false) {
   if (!isId(review?.answerId) || !Number.isSafeInteger(review.answerRevision) || review.answerRevision < 1) return false
   if (review.decision === 'accepted') return review.rejectionComment === undefined
-  return review.decision === 'rejected' && validAnswerContent({ value: 'not_relevant', reason: review.rejectionComment })
+  const validAnswer = locked ? validRecordedAnswer : validAnswerContent
+  return review.decision === 'rejected' && validAnswer({ value: 'not_relevant', reason: review.rejectionComment })
 }
 
 export function validateSavedMentorDays(run: Run) {
@@ -151,13 +154,17 @@ export function validateSavedMentorDays(run: Run) {
     }
     for (const [id, review] of Object.entries(draft.reviews)) {
       const answer = day.driverAfterAnswers?.find(item => item.criterionId === id)
-      if (!answer || !review || !validReview(review) || !isMentorActor(review.actor)
+      if (!answer || !review || !validReview(review, Boolean(day.mentorConfirmation)) || !isMentorActor(review.actor)
         || review.answerId !== answer.id || review.answerRevision > answer.answerRevision
         || (review.answerRevision === answer.answerRevision && answer.value !== 'not_relevant')) {
         throw new AppError('storage_read')
       }
     }
-    if (day.mentorConfirmation && !checkMentorDay(run, day).complete) throw new AppError('storage_read')
+    if (day.mentorConfirmation && (!driverReadyForMentorDay(run, day)
+      || !dailyFollowUp(run, day) || Object.keys(checkDayFields(dayDraft(run, day), 'day-lock')).length
+      || Object.values(driverRelevance(run, day)).some(({ state }) => state === 'pending' || state === 'outdated'))) {
+      throw new AppError('storage_read')
+    }
   }
 }
 

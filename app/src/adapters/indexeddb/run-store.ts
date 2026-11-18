@@ -13,9 +13,11 @@ import { confirmMentorDay, reviewRelevance, updateMentorDay, validateSavedMentor
 import type { ConfirmMentorDayCommand, MentorDayReceipt, ReviewRelevanceCommand, SaveMentorDayCommand } from '../../domain/mentor-day.ts'
 import { currentPlan, followUpWindow, runStatus, saveFollowUp, validateSavedPlan } from '../../domain/follow-up.ts'
 import type { FollowUpReceipt, SaveFollowUpCommand } from '../../domain/follow-up.ts'
+import { closeRun, saveConclusion, validateSavedClosure } from '../../domain/closure.ts'
+import type { CloseRunCommand, SaveConclusionCommand } from '../../domain/closure.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 const META = 'meta'
 const RUNS = 'runs'
@@ -45,6 +47,8 @@ function readRun(record: SavedRun) {
   if (!record) throw new AppError('storage_read')
   const run = check(record)
   validateSavedRun(run)
+  validateSavedClosure(run)
+  if (run.lifecycle === 'closed') return run
   validateSavedBaseline(run)
   validateSavedPlan(run)
   validateSavedDriverDays(run)
@@ -52,11 +56,11 @@ function readRun(record: SavedRun) {
   return run
 }
 
-function migrateV1(tx: IDBTransaction) {
+function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
   const meta = tx.objectStore(META)
   const schema = meta.get(SCHEMA)
   schema.onsuccess = () => {
-    if (schema.result?.schemaVersion !== 1) {
+    if (schema.result?.schemaVersion !== previousVersion) {
       tx.abort()
       return
     }
@@ -69,7 +73,7 @@ function migrateV1(tx: IDBTransaction) {
       if (!cursor) return
       if (name !== META || cursor.key === SESSION) {
         const record = cursor.value as Envelope<unknown>
-        if (record?.schemaVersion !== 1 || !Object.hasOwn(record, 'data')) {
+        if (record?.schemaVersion !== previousVersion || !Object.hasOwn(record, 'data')) {
           tx.abort()
           return
         }
@@ -105,7 +109,7 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
         db.createObjectStore(COMMANDS)
       } else {
         try {
-          migrateV1(tx)
+          migrateEnvelopes(tx, event.oldVersion)
         } catch {
           tx.abort()
         }
@@ -393,6 +397,18 @@ export class IndexedDbRunStore implements RunStore {
     }))
   }
 
+  saveConclusion(command: SaveConclusionCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: saveConclusion(run, command), dayId: run.firstDay.id,
+    }))
+  }
+
+  closeRun(command: CloseRunCommand, fingerprint: string): Promise<RunReceipt> {
+    return this.#mutateRun(command, fingerprint, run => ({
+      run: closeRun(run, command), dayId: run.firstDay.id,
+    }))
+  }
+
   #mutateRun(
     command: Pick<SaveDayDraftCommand, 'commandId' | 'runId' | 'actor'>,
     fingerprint: string,
@@ -422,6 +438,7 @@ export class IndexedDbRunStore implements RunStore {
           operations.get<SavedRun>(RUNS, runId, record => {
             if (!record) throw new AppError('run_missing')
             const previous = readRun(record)
+            if (previous.lifecycle === 'closed') throw new AppError('locked')
             const { run, dayId } = update(previous)
             const receipt = makeReceipt(run, { runId, dayId, revision: run.revision }, previous)
             if (run !== previous) operations.put(RUNS, runId, envelope(run))

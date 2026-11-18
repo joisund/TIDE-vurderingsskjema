@@ -1,6 +1,6 @@
 import {
-  applyBaselineChanges, checkBaselineAnswers, emptyAnswer, firstDayCanDriveAfter, validAnswerContent,
-  validateAnswerChanges, validateAnswerSet, validateDriverCommand, validReasonDrafts,
+  applyBaselineChanges, baselineOf, checkBaselineAnswers, emptyAnswer, firstDayCanDriveAfter, validAnswerContent,
+  validateAnswerChanges, validateAnswerSet, validateDriverCommand, validReasonDrafts, validRecordedAnswer,
 } from './baseline.ts'
 import type { AnswerDraft, BaselineChanges, DriverAfterAnswer } from './baseline.ts'
 import { checkDayFields, dayDraft } from './day-draft.ts'
@@ -96,7 +96,7 @@ export function validateSavedDriverDays(run: Run) {
     if (driverAfterAnswers !== undefined) {
       validateAnswerSet(run, driverAfterAnswers, 'driver_after', day.id)
       if (day.number !== 1 && driverAfterAnswers.some(answer => answer.locked !== false || answer.inheritedFrom !== undefined
-        || !validAnswerContent(answer))) throw new AppError('storage_read')
+        || !(driverConfirmation ? validRecordedAnswer : validAnswerContent)(answer))) throw new AppError('storage_read')
     }
     if (!baselineConfirmed) {
       if ((driverAfterAnswers !== undefined && (day.number === 1
@@ -196,7 +196,7 @@ export function updateDriverDayDraft(run: Run, command: SaveDriverDayDraftComman
       if (known === false || (known === undefined && previous?.offerPlanRevision !== oldRevision)) throw new AppError('invalid_command')
     }
     if (!offered && oldRevision === undefined) throw new AppError('invalid_command')
-    const issues = checkBaselineAnswers(updated.driverAfterAnswers ?? draft.answers)
+    const issues = checkBaselineAnswers(updated.driverAfterAnswers ?? draft.answers, day.number === 1 ? baselineOf(run).answers : undefined)
     const complete = Object.keys(issues).length === 0
     const verifiedRevision = oldRevision ?? (previous?.offerPlanRevision === plan.revision ? plan.revision : undefined)
     if (!complete && (evaluation.decision || evaluation.markOffer || verifiedRevision === undefined)) {
@@ -212,7 +212,8 @@ export function confirmDriverDay(run: Run, command: ConfirmDriverDayCommand): Ru
   validateConfirmDriverDayCommand(command)
   const { day, plan, draft } = writableDriverDay(run, command)
   const fields = dayDraft(run, day)
-  const issues: Record<string, string> = { ...checkDayFields(fields, 'driver'), ...checkBaselineAnswers(draft.answers) }
+  const answers = checkBaselineAnswers(draft.answers, day.number === 1 ? baselineOf(run).answers : undefined)
+  const issues: Record<string, string> = { ...checkDayFields(fields, 'driver'), ...answers }
   const offered = offersEvaluation(plan, day)
   const evaluation = snapshotEvaluation(day.id, day.date, plan.revision, offered, day.evaluationDraft)
   if (offered && evaluation.state === 'not_offered') issues.evaluation = 'Gå til egenevalueringen og velg om du vil sende den inn eller hoppe over.'

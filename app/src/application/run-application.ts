@@ -20,15 +20,24 @@ import {
 import type { ConfirmMentorDayCommand, MentorDayChanges, MentorDayReceipt, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 import { dailyFollowUp, followUpWindow, runStatus, validateFollowUpCommand } from '../domain/follow-up.ts'
 import type { FollowUpChoice, SaveFollowUpCommand } from '../domain/follow-up.ts'
+import { checkClosureDays, conclusionDraft, validateCloseRunCommand, validateSaveConclusionCommand } from '../domain/closure.ts'
+import type { CloseRunCommand, ConclusionDraft, ConclusionStatus, SaveConclusionCommand } from '../domain/closure.ts'
+
+function historicalRun(run: Run): Run {
+  return run.lifecycle === 'closed' && run.closureSnapshot
+    ? { ...run.closureSnapshot.history, lifecycle: 'closed', closureSnapshot: run.closureSnapshot }
+    : run
+}
 
 function summary(run: Run) {
-  const identity = run.firstDay.driverIdentity ?? run.driver
+  const source = historicalRun(run)
+  const identity = source.firstDay.driverIdentity ?? source.driver
   return {
     id: run.id,
     status: runStatus(run),
     driverName: identity.name,
     employeeNumber: identity.employeeNumber,
-    firstDate: run.firstDay.date,
+    firstDate: source.firstDay.date,
   }
 }
 
@@ -67,11 +76,11 @@ function driverAfterView(run: Run, day: Day, role: Role) {
 }
 
 function mentorDayView(run: Run, day: Day) {
-  const { answers, reasonDrafts, comments, rejectionDrafts } = mentorDayOf(run, day)
+  const { answers, reasonDrafts, comments, rejectionDrafts, reviews } = mentorDayOf(run, day)
   const editable = !dayLocks(run, day).dayLocked
   return {
     answers, comments,
-    reasonDrafts, rejectionDrafts,
+    reasonDrafts, rejectionDrafts, reviews,
     relevance: driverRelevance(run, day),
     completion: editable ? checkMentorDay(run, day) : undefined,
     driverReady: driverReadyForMentorDay(run, day),
@@ -88,38 +97,58 @@ function mentorDayView(run: Run, day: Day) {
   }
 }
 
+function historyDay(run: Run, day: Day, role: Role, full: boolean) {
+  return {
+    day: day.number,
+    dayId: day.id,
+    fields: dayDraft(run, day),
+    baseline: baselineView(run, role),
+    driverAfter: driverAfterView(run, day, role),
+    ...((full || role === 'fadder') && { mentorDay: mentorDayView(run, day) }),
+  }
+}
+
+export type HistoryDay = ReturnType<typeof historyDay>
+
 function toView(state: WorkspaceState) {
   const selection = state.session.selection
-  const run = state.runs.find(item => item.id === selection?.runId)
+  const stored = state.runs.find(item => item.id === selection?.runId)
+  const run = stored && historicalRun(stored)
   const day = run && selection && findDay(run, selection.dayId)
   const plan = run && currentPlan(run)
+  const closure = run?.closureSnapshot
+  const role = state.session.actor.role
   if (selection && (!run || !day)) throw new AppError('storage_read')
   return {
     actor: { ...state.session.actor },
     runs: state.runs.map(summary),
     selected: run && day && plan && {
       ...summary(run),
-      dayId: day.id,
-      day: day.number,
+      ...historyDay(run, day, role, Boolean(closure)),
       revision: run.revision,
-      fields: dayDraft(run, day),
-      access: dayFieldAccess(run, day, state.session.actor.role),
+      access: dayFieldAccess(run, day, role),
       ...dayLocks(run, day),
-      baseline: baselineView(run, state.session.actor.role),
-      driverAfter: driverAfterView(run, day, state.session.actor.role),
-      ...(state.session.actor.role === 'fadder' && {
-        mentorDay: mentorDayView(run, day),
-        extensionWindow: run.lifecycle === 'open' && day.mentorConfirmation
-          ? followUpWindow(run, day, 'extension') : undefined,
+      extensionWindow: role === 'fadder' && run.lifecycle === 'open' && day.mentorConfirmation
+        ? followUpWindow(run, day, 'extension') : undefined,
+      ...(role === 'fadder' && run.lifecycle === 'open' && {
+        conclusion: { draft: conclusionDraft(run), issues: checkClosureDays(run) },
       }),
-      canCreateDay: run.lifecycle === 'open' && runDays(run).length < plan.lastDay && state.session.actor.role === 'fadder',
+      closed: closure && {
+        conclusion: closure.conclusion,
+        closedBy: closure.closedBy,
+        initialLastDay: run.initialLastDay,
+        planHistoryBase: run.planHistoryBase,
+        history: closure.history.planEvents ?? [],
+        days: runDays(run).map(item => historyDay(run, item, role, true)),
+      },
+      canCreateDay: run.lifecycle === 'open' && runDays(run).length < plan.lastDay && role === 'fadder',
       planRevision: plan.revision,
       plannedLastDay: plan.lastDay,
       plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
       days: runDays(run).map(item => ({
         id: item.id, number: item.number, date: item.date, driverConfirmation: item.driverConfirmation,
         dayLocked: dayLocks(run, item).dayLocked,
-        ...(state.session.actor.role === 'fadder' && { mentorConfirmation: item.mentorConfirmation }),
+        ...(closure || role === 'fadder' ? { mentorConfirmation: item.mentorConfirmation } : {}),
       })),
     },
   }
@@ -425,6 +454,46 @@ export class RunApplication {
       'save-follow-up', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.source,
       payload.choice.kind, payload.choice.kind === 'days' ? payload.choice.extraDays : null,
     ]))
+  }
+
+  newSaveConclusionCommand(actor: Actor, day: DayView, draft: ConclusionDraft): SaveConclusionCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, expectedRevision: day.revision, actor: { ...actor }, payload: { ...draft },
+    }
+  }
+
+  async executeSaveConclusion(command: SaveConclusionCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    validateSaveConclusionCommand(snapshot)
+    const { runId, expectedRevision, actor, payload } = snapshot
+    return this.#store.saveConclusion(snapshot, JSON.stringify([
+      'save-conclusion', runId, actor.id, actor.role, expectedRevision, payload.text, payload.status, payload.mentorName,
+    ]))
+  }
+
+  newCloseRunCommand(actor: Actor, day: DayView, draft: ConclusionDraft & { status: ConclusionStatus }): CloseRunCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, expectedRevision: day.revision, actor: { ...actor },
+      payload: { ...draft, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  async executeCloseRun(command: CloseRunCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    validateCloseRunCommand(snapshot)
+    const { runId, expectedRevision, actor, payload } = snapshot
+    return this.#store.closeRun(snapshot, JSON.stringify([
+      'close-run', runId, actor.id, actor.role, expectedRevision,
+      payload.text, payload.status, payload.mentorName, payload.confirmedAt,
+    ]))
+  }
+
+  async readClosureSnapshot(runId: string) {
+    const { runs } = await this.#store.read()
+    const run = runs.find(item => item.id === runId)
+    if (!run) throw new AppError('run_missing')
+    if (run.lifecycle !== 'closed' || !run.closureSnapshot) throw new AppError('locked')
+    return run.closureSnapshot
   }
 
   async read(selection?: Selection) {

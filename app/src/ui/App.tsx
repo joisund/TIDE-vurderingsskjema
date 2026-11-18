@@ -2,6 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useSta
 import { flushSync } from 'react-dom'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { DayField } from '../domain/day-draft.ts'
+import type { ClosureIssue } from '../domain/closure.ts'
 import { availableExtraDays } from '../domain/follow-up.ts'
 import { AppError, validateCreateRun } from '../domain/run.ts'
 import type { CreateRunCommand, CreateRunFields, FieldErrors, Role, RunReceipt } from '../domain/run.ts'
@@ -11,12 +12,13 @@ import { ExtendRunForm } from './ExtendRunForm.tsx'
 import { CalendarDate } from './CalendarDate.tsx'
 import { AssessmentForm } from './AssessmentForm.tsx'
 import { DayDraftForm } from './DayDraftForm.tsx'
-import { DayHistory, DayTimeline } from './DayHistory.tsx'
+import { ClosedHistory, DayHistory, DayTimeline } from './DayHistory.tsx'
 import { MentorAssessmentForm } from './MentorAssessmentForm.tsx'
 import type { MentorAssessmentHandle } from './MentorAssessmentForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
+import { ClosureForm } from './ClosureForm.tsx'
 
-type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend'
+type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend' | 'closure'
 type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | DayScreen
 type RoleRestore = 'checking' | 'read-error' | 'local-draft'
 type Props = {
@@ -43,6 +45,7 @@ const headings: Record<Screen, string> = {
   history: 'Historikk',
   'create-day': 'Opprett neste dag',
   extend: 'Utvid planen',
+  closure: 'Avslutt perioden',
 }
 
 export function App({ application, logo, prepare, requestPersistence, report }: Props) {
@@ -59,6 +62,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const [navigationError, setNavigationError] = useState('')
   const [roleRestore, setRoleRestore] = useState<RoleRestore>()
   const [dayEditorGeneration, setDayEditorGeneration] = useState(0)
+  const [closureEditorGeneration, setClosureEditorGeneration] = useState(0)
   const [online, setOnline] = useState(() => navigator.onLine)
   const editor = useRef<MentorAssessmentHandle>(null)
   const [fieldToFix, setFieldToFix] = useState<DayField>()
@@ -74,7 +78,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const selected = screen === 'loading' || screen === 'unavailable' || screen === 'runs' || screen === 'create' ? undefined : view?.selected
   const dayCommandForm = screen === 'create-day' || screen === 'extend'
   const draftRole = dayCommandForm ? 'fadder' : (view?.actor.role ?? 'fadder')
-  const guardedScreen = dayCommandForm || screen === 'mentor' || screen === 'history' || screen === 'day'
+  const guardedScreen = dayCommandForm || screen === 'mentor' || screen === 'history' || screen === 'day' || screen === 'closure'
 
   const accept = useCallback((data: WorkspaceView) => {
     setView(data)
@@ -119,7 +123,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       focusHeading.current = false
       heading.current?.focus()
     }
-  }, [screen, selected?.dayId])
+  }, [screen, selected?.dayId, closureEditorGeneration])
 
   useEffect(() => {
     const updateNetwork = () => setOnline(navigator.onLine)
@@ -223,13 +227,13 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     })
   }
 
-  function showAssessmentScreen(next: DayScreen, field?: DayField) {
+  function showAssessmentScreen(next: DayScreen, field?: DayField, requestedDayId?: string) {
     if (!selected) return
     void perform(async () => {
       if (editor.current && !await editor.current.flush()) return
       try {
-        const dayId = field && screen === 'baseline' ? selected.baseline.firstDayId : selected.dayId
-        const latest = await application.withOpenStorage(() => field
+        const dayId = requestedDayId ?? (field && screen === 'baseline' ? selected.baseline.firstDayId : selected.dayId)
+        const latest = await application.withOpenStorage(() => field || requestedDayId
           ? application.select(selected.id, dayId)
           : application.read({ runId: selected.id, dayId }))
         if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
@@ -238,6 +242,14 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
           if (screen === 'day' && latest.selected?.revision !== selected.revision) {
             setDayEditorGeneration(generation => generation + 1)
           }
+        }
+        if (latest.selected?.closed && next !== 'day') {
+          navigate('history')
+          return
+        }
+        if (next === 'closure' && !latest.selected?.conclusion) {
+          setNavigationError('Velg fadderrollen for å avslutte perioden.')
+          return
         }
         if (next === 'after' && !latest.selected?.driverAfter) {
           setNavigationError(explain(new AppError('baseline_required')))
@@ -295,6 +307,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       attempt.current = undefined
       clearRoleRestore()
       if (screen === 'mentor' && !next.selected?.mentorDay) setScreen('day')
+      if (screen === 'closure' && !next.selected?.conclusion) setScreen(next.selected?.closed ? 'history' : 'day')
     })
     flushSync(() => { setView(next) })
     const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === 'fadder'
@@ -309,6 +322,22 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
     cachedDialog.current = undefined
   }
 
+  function adoptClosureState(stored: WorkspaceView) {
+    const differentRole = view?.actor.id !== stored.actor.id || view?.actor.role !== stored.actor.role
+    if (differentRole) replaceRoleView(stored)
+    else setView(stored)
+    if (stored.selected?.closed) {
+      navigate('history')
+    } else if (!stored.selected?.conclusion) {
+      navigate('day')
+    } else {
+      clearRoleRestore()
+      focusHeading.current = true
+      setClosureEditorGeneration(generation => generation + 1)
+      setNavigationError('Gjeldende tilstand er lastet inn. Kontroller avslutningen på nytt.')
+    }
+  }
+
   async function checkRestoredRole(resume = false) {
     if (!guardedScreen || !selected || !view) return
     setRoleRestore('checking')
@@ -318,11 +347,15 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
         ? application.changeRole(draftRole, selection)
         : application.read(selection))
       const sameActor = (state: WorkspaceView) => state.actor.id === view.actor.id && state.actor.role === view.actor.role
-      const shouldFlush = !resume && editor.current && (screen === 'day' || !sameActor(beforeFlush))
+      const shouldFlush = editor.current && (screen === 'closure' || (!resume && (screen === 'day' || !sameActor(beforeFlush))))
       const flushed = !shouldFlush || await editor.current!.flush()
       // Rolle og revisjon kan ha endret seg mens editoren ventet på lagring eller feilhåndtering.
       const next = shouldFlush ? await application.read(selection) : beforeFlush
       const latest = next.selected
+      if (screen === 'closure' && flushed && (latest?.closed || latest?.revision !== selected.revision)) {
+        adoptClosureState(next)
+        return
+      }
       if (!resume && !sameActor(next)) {
         if (dayCommandForm || !flushed) {
           setRoleRestore('local-draft')
@@ -402,6 +435,11 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       heading.current?.focus()
     }
     else setView(stored)
+  }
+
+  function openClosureIssue(issue: ClosureIssue) {
+    if (issue.section === 'session') showAssessmentScreen('day', issue.field, issue.dayId)
+    else showAssessmentScreen(issue.section === 'days' ? 'day' : issue.section, undefined, issue.dayId)
   }
 
   function refreshDraft() {
@@ -505,7 +543,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
         </div>
       </header>
       <main className="content">
-        <h1 ref={heading} tabIndex={-1}>{headings[screen]}</h1>
+        <h1 ref={heading} tabIndex={-1}>{screen === 'history' && selected?.closed ? 'Hele skjemaet' : headings[screen]}</h1>
         {screen === 'create' && <p className="save-status" role="status" aria-atomic="true">{storageStatus}</p>}
         {navigationError && <p className="error-panel" role="alert">{navigationError}</p>}
         {screen === 'loading' && <p role="status">Åpner lokalt lager og laster løp …</p>}
@@ -568,7 +606,18 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
             }} />
           </div>
         )}
-        {screen === 'day' && selected && view && (
+        {screen === 'day' && selected?.closed && !roleRestore && (
+          <>
+            <p className="run-status">Avsluttet</p>
+            <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id)} />
+            <div className="actions">
+              <button type="button" className="button primary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('history')}>Åpne hele skjemaet</button>
+              <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
+            </div>
+          </>
+        )}
+        {screen === 'day' && selected && !selected.closed && view && (
           <div hidden={Boolean(roleRestore)}>
             {storageStatus && <p role="status" className="save-status">{storageStatus}</p>}
             <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id)} />
@@ -623,17 +672,36 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
               initial={selected} actor={view.actor} application={application} report={report}
               onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} fieldToFix={fieldToFix} />
             <div className="actions">
+              {selected.conclusion && (
+                <button type="button" className="button primary" aria-disabled={busy}
+                  onClick={() => showAssessmentScreen('closure')}>Avslutt perioden</button>
+              )}
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('history')}>Åpne historikk</button>
               <button type="button" className="button secondary" aria-disabled={busy} onClick={showRuns}>Til løpsoversikten</button>
             </div>
           </div>
         )}
+        {screen === 'closure' && selected?.conclusion && view && (
+          <div hidden={Boolean(roleRestore)}>
+            <ClosureForm key={`${view.actor.id}/${selected.id}/${closureEditorGeneration}`} ref={editor}
+              initial={{ ...selected, conclusion: selected.conclusion }} actor={view.actor} application={application}
+              navigating={busy} report={report} onSaved={acceptDaySave} onStored={adoptClosureState} onIssue={openClosureIssue} />
+            <div className="actions">
+              <button type="button" className="button secondary" aria-disabled={busy}
+                onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>
+            </div>
+          </div>
+        )}
         {screen === 'history' && selected && view && !roleRestore && (
           <>
-            <p>Planlagt siste dag · Dag {selected.plannedLastDay}</p>
-            <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id, 'history')} />
-            <DayHistory key={`${view.actor.id}/${selected.dayId}`} day={selected} />
+            {selected.closed ? <ClosedHistory key={`${view.actor.id}/${selected.id}`} day={{ ...selected, closed: selected.closed }} /> : (
+              <>
+                <p>Planlagt siste dag · Dag {selected.plannedLastDay}</p>
+                <DayTimeline day={selected} busy={busy} onSelect={id => openRun(selected.id, id, 'history')} />
+                <DayHistory key={`${view.actor.id}/${selected.dayId}`} day={selected} />
+              </>
+            )}
             <div className="actions">
               <button type="button" className="button secondary" aria-disabled={busy}
                 onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>

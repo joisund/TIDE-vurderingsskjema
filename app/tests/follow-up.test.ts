@@ -118,7 +118,6 @@ test('daglig valg erstatter samme effekt, andre dager og historisk avsender beva
   assert.equal(allNo.planEvents![3].date, day2.date)
   assert.deepEqual(allNo.planEvents!.slice(0, 2), next.planEvents)
   assert.doesNotThrow(() => validateSavedPlan(allNo))
-  assert.equal(runStatus({ ...next, lifecycle: 'closed' }), 'Avsluttet')
 })
 
 test('dagslåsen verner beslutningen mens separat utvidelse får en ny ID og femdagersgrensen gjelder', () => {

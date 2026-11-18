@@ -5,6 +5,8 @@ export const answerLabels = {
   ok: 'OK', needs_improvement: 'Kan bli bedre', not_relevant: 'Ikke relevant',
 } as const
 
+export const conclusionLabels = { approved: 'Godkjent', follow_up_needed: 'Oppfølgingsbehov' } as const
+
 export const evaluationLabels = {
   strength1: 'Styrke 1', strength2: 'Styrke 2', strength3: 'Styrke 3',
   growth1: 'Utviklingsområde 1', growth2: 'Utviklingsområde 2', growth3: 'Utviklingsområde 3',

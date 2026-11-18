@@ -2,6 +2,7 @@ import type { Baseline, DriverAfterAnswer } from './baseline.ts'
 import type { EvaluationDraft, DriverEvaluation } from './driver-day.ts'
 import type { FollowUpDecision, PlanEvent, RunPlan } from './follow-up.ts'
 import type { MentorDay } from './mentor-day.ts'
+import type { ClosureSnapshot, ConclusionDraft } from './closure.ts'
 
 export type Role = 'fadder' | 'sjåfør'
 export type Actor = { id: string; role: Role }
@@ -65,6 +66,8 @@ export type Run = {
   baseline?: Baseline
   baselineConfirmation?: Confirmation
   content: ContentSnapshot
+  conclusionDraft?: ConclusionDraft
+  closureSnapshot?: ClosureSnapshot
 }
 
 export type CreateRunCommand = {
@@ -164,7 +167,7 @@ export function isConfirmationTime(time: unknown): time is string {
     && time.endsWith('Z')
 }
 
-function isConfirmation(confirmation: Confirmation, role: Role) {
+export function isConfirmation(confirmation: Confirmation, role: Role) {
   return isId(confirmation?.actor?.id) && confirmation.actor.role === role && hasText(confirmation.actor.name)
     && isConfirmationTime(confirmation.confirmedAt)
 }

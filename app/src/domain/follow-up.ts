@@ -69,7 +69,7 @@ function plannedLastDay(initial: number, decisions: readonly FollowUpDecision[])
 }
 
 export function runStatus(run: Run) {
-  if (run.lifecycle === 'closed') return 'Avsluttet'
+  if (run.lifecycle === 'closed' && run.closureSnapshot) return 'Avsluttet'
   return run.followUpDecisions?.some(({ choice }) => choice.kind !== 'none') ? 'Under oppfølging' : 'Pågående'
 }
 
@@ -226,7 +226,7 @@ export function validateSavedPlan(run: Run) {
       if ((existingId && existingId !== event.decisionId) || (previous && previous.dayId !== day.id)
         || (previous && previous.source !== 'daily')) throw new AppError('storage_read')
       dailyIds.set(day.id, event.decisionId)
-    } else if (event.source !== 'extension' || previous || !day.mentorConfirmation
+    } else if (event.source !== 'extension' || previous || !day.mentorConfirmation || event.date !== day.date
       || event.choice.kind !== 'days' || event.newLastDay <= lastDay) throw new AppError('storage_read')
     active.set(event.decisionId, { id: event.decisionId, dayId: day.id, source: event.source, choice: event.choice })
     commandIds.add(event.commandId)

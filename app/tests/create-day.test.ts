@@ -9,6 +9,9 @@ import { createDay } from '../src/domain/create-day.ts'
 import { driverAfterOf } from '../src/domain/driver-day.ts'
 import { mentorDayOf } from '../src/domain/mentor-day.ts'
 import { runDays } from '../src/domain/run.ts'
+import type { Run } from '../src/domain/run.ts'
+import { checkClosureDays, validateClosureSnapshot } from '../src/domain/closure.ts'
+import type { ConclusionStatus } from '../src/domain/closure.ts'
 
 const fields = { driverName: 'Nora Eksempel', employeeNumber: 'DEMO-18', mentorName: 'Fadder Første',
   firstDate: '2028-02-25', initialLastDay: '3' }
@@ -208,7 +211,165 @@ test('fullfører 1, 2, 3 og 5 dager med eksakt dekning og separate historiske be
     const projection = JSON.stringify(driver)
     assert.doesNotMatch(projection, /Kommentar dag|planEvents|mentorConfirmation/)
     assert.equal(driver.selected?.plannedLastDay, length)
+
+    const mentor = await app.changeRole('fadder')
+    const status: ConclusionStatus = length === 5 ? 'follow_up_needed' : 'approved'
+    const conclusion = { status, text: length === 1 ? '' : 'Lang konklusjon.\n'.repeat(800), mentorName: 'Fadder Avslutter' }
+    await app.executeSaveConclusion(app.newSaveConclusionCommand(mentor.actor, mentor.selected!, conclusion))
+    const acknowledged = (await app.read()).selected!
+    const command = app.newCloseRunCommand(mentor.actor, acknowledged, conclusion)
+    const closed = await app.executeCloseRun(command)
+    const document = await app.readClosureSnapshot(raw.id)
+    assert.equal(document.history.content.criteria.length, 22)
+    assert.equal(document.pdfLayoutVersion, 1)
+    assert.deepEqual(runDays({ ...document.history, lifecycle: 'closed' }), runDays(raw))
+    assert.deepEqual(document.history.planEvents, raw.planEvents)
+    if (length === 5) {
+      const altered = structuredClone(document)
+      const extension = altered.history.planEvents!.find(event => event.source === 'extension')!
+      extension.date = altered.history.firstDay.date
+      assert.throws(() => validateClosureSnapshot(altered), { code: 'storage_read' })
+    }
+    assert.deepEqual(document.conclusion, { text: conclusion.text, status })
+    assert.deepEqual(document.closedBy.actor, { ...mentor.actor, name: conclusion.mentorName })
+    const mentorClosed = (await app.read()).selected!
+    const driverClosed = (await app.changeRole('sjåfør')).selected!
+    assert.equal(driverClosed.status, 'Avsluttet')
+    assert.deepEqual(driverClosed.closed, mentorClosed.closed)
+    assert.deepEqual(await app.executeCloseRun(command), closed)
+    assert.equal(driverClosed.canCreateDay, false)
   }
+})
+
+test('avslutning krever alle opprettede dager og et kvittert utkast, og tåler kvotefeil og repetisjon', async t => {
+  const { app, store, factory } = await finishRun('3', 1)
+  const other = fixture(factory)
+  await other.app.open()
+  const { actor, selected } = await app.read()
+  const draft = { text: 'Behold avsnitt.\n\n', status: 'follow_up_needed' as const, mentorName: 'Fadder Avslutter' }
+  assert.deepEqual(checkClosureDays({ ...(await store.read()).runs[0], firstDay: undefined! }).map(issue => issue.section), ['days'])
+  await assert.rejects(app.readClosureSnapshot(selected!.id), { code: 'locked' })
+  await assert.rejects(app.executeCloseRun(app.newCloseRunCommand(actor, selected!, draft)), { code: 'stale' })
+  const dirtyRole = await app.changeRole('sjåfør')
+  await assert.rejects(app.executeSaveConclusion(app.newSaveConclusionCommand(dirtyRole.actor, dirtyRole.selected!, draft)),
+    { code: 'wrong_role' })
+  await assert.rejects(app.executeCloseRun(app.newCloseRunCommand(dirtyRole.actor, dirtyRole.selected!, draft)), { code: 'wrong_role' })
+  await app.changeRole('fadder')
+
+  await app.executeSaveConclusion(app.newSaveConclusionCommand(actor, selected!, draft))
+  const stale = app.newCloseRunCommand(actor, (await app.read()).selected!, draft)
+  const nextDraft = { ...draft, text: '' }
+  const otherOpen = (await other.app.read()).selected!
+  await other.app.executeSaveConclusion(other.app.newSaveConclusionCommand(actor, otherOpen, nextDraft))
+  await assert.rejects(app.executeCloseRun(stale), { code: 'stale' })
+  const acknowledged = (await app.read()).selected!
+  assert.deepEqual(acknowledged.conclusion?.draft, nextDraft)
+  const command = app.newCloseRunCommand(actor, acknowledged, nextDraft)
+
+  const add = IDBObjectStore.prototype.add
+  const fault = t.mock.method(IDBObjectStore.prototype, 'add', function (this: IDBObjectStore, data, key) {
+    if (key === command.commandId) throw new DOMException('Testavbrudd', 'QuotaExceededError')
+    return add.call(this, data, key)
+  })
+  const before = await store.read()
+  await assert.rejects(app.executeCloseRun(command), { code: 'storage_write' })
+  assert.deepEqual(await store.read(), before)
+  fault.mock.restore()
+  const receipt = await app.executeCloseRun(command)
+  assert.deepEqual(await other.app.executeCloseRun(command), receipt)
+  await assert.rejects(other.app.executeCloseRun({ ...command, payload: { ...command.payload, text: 'Annet' } }),
+    { code: 'command_conflict' })
+  const closed = (await other.app.read()).selected!
+  assert.equal(closed.status, 'Avsluttet')
+  await assert.rejects(other.app.executeCloseRun(other.app.newCloseRunCommand(actor, closed, nextDraft)), { code: 'locked' })
+  await assert.rejects(other.app.executeSaveConclusion(other.app.newSaveConclusionCommand(actor, closed, nextDraft)), { code: 'locked' })
+  await assert.rejects(other.app.executeCreateDay(other.app.newCreateDayCommand(actor, closed, fieldsFor(2))), { code: 'locked' })
+  await assert.rejects(other.app.executeFollowUp(other.app.newFollowUpCommand(actor, closed, { kind: 'days', extraDays: 1 }, 'extension')),
+    { code: 'locked' })
+  const doc = await other.app.readClosureSnapshot(closed.id)
+  const selection = { runId: closed.id, dayId: closed.dayId }
+  const target = closed.driverAfter!.answers[0]
+  await assert.rejects(other.app.executeDayDraft(other.app.newDayDraftCommand(actor, selection, closed.revision, { bus1: 'Omskrevet' })),
+    { code: 'locked' })
+  await assert.rejects(other.app.executeMentorDay(other.app.newMentorDayCommand(actor, closed, { comments: { [ids[0]]: 'Omskrevet' } })),
+    { code: 'locked' })
+  await assert.rejects(other.app.executeReview(other.app.newReviewCommand(actor, closed, ids[0], {
+    answerId: target.id, answerRevision: target.answerRevision, decision: 'accepted',
+  })), { code: 'locked' })
+  await assert.rejects(other.app.executeConfirmMentorDay(other.app.newConfirmMentorDayCommand(actor, closed)), { code: 'locked' })
+  const driver = await other.app.changeRole('sjåfør')
+  await assert.rejects(other.app.executeBaselineDraft(other.app.newBaselineDraftCommand(driver.actor, closed.id, closed.revision, allOk)),
+    { code: 'locked' })
+  await assert.rejects(other.app.executeDriverDayDraft(other.app.newDriverDayDraftCommand(driver.actor, driver.selected!, { answers: allOk })),
+    { code: 'locked' })
+  await assert.rejects(other.app.executeConfirmBaseline(other.app.newConfirmBaselineCommand(driver.actor, closed.id, closed.revision)),
+    { code: 'locked' })
+  await assert.rejects(other.app.executeConfirmDriverDay(other.app.newConfirmDriverDayCommand(driver.actor, driver.selected!)),
+    { code: 'locked' })
+  assert.deepEqual(await other.app.readClosureSnapshot(closed.id), doc)
+  assert.deepEqual(doc.history.firstDay, before.runs[0].firstDay)
+  assert.equal(doc.history.initialLastDay, 3)
+  assert.equal(doc.conclusion.text, '')
+})
+
+test('CloseRun avviser et kvittert konklusjonsutkast når en opprettet dag eller en låst del har mangler', async () => {
+  const { app, store, factory } = await finishRun('3', 1)
+  const { actor, selected } = await app.read()
+  const { dayId } = await app.executeCreateDay(app.newCreateDayCommand(actor, selected!, fieldsFor(2)))
+  const first = (await app.select(selected!.id, selected!.dayId)).selected!
+  const draft = { text: '', status: 'approved' as const, mentorName: 'Fadder Avslutter' }
+  await app.executeSaveConclusion(app.newSaveConclusionCommand(actor, first, draft))
+  const ready = (await app.read()).selected!
+  assert.ok(ready.conclusion?.issues.some(issue => issue.dayId === dayId && issue.section === 'session' && issue.field === 'bus1'))
+  await assert.rejects(app.executeCloseRun(app.newCloseRunCommand(actor, ready, draft)), { code: 'validation' })
+  const [run] = (await store.read()).runs
+  assert.equal(run.lifecycle, 'open')
+  assert.equal(run.closureSnapshot, undefined)
+  run.firstDay.mentorConfirmation!.actor.name = 'Avvikende navn'
+  await putRun(factory, run)
+  const altered = (await app.read()).selected!
+  assert.ok(altered.conclusion?.issues.some(issue => issue.dayId === first.dayId && issue.section === 'history'))
+  await assert.rejects(app.executeCloseRun(app.newCloseRunCommand(actor, altered, draft)), { code: 'validation' })
+})
+
+test('dokumentkontrollen avviser fullstendig antall med feil ID og manglende historiske referanser', async () => {
+  const { app, store, factory } = await finishRun('3', 2)
+  const { actor, selected } = await app.read()
+  const draft = { text: '', status: 'approved' as const, mentorName: 'Fadder Avslutter' }
+  await app.executeSaveConclusion(app.newSaveConclusionCommand(actor, selected!, draft))
+  const open = (await app.read()).selected!
+  await app.executeCloseRun(app.newCloseRunCommand(actor, open, draft))
+  const doc = await app.readClosureSnapshot(open.id)
+  const corruptions: Array<(snapshot: typeof doc) => void> = [
+    ({ history }) => { history.baseline.answers[0].criterionId = 'fremmed-id' },
+    ({ history }) => { history.firstDay.driverAfterAnswers![1] = history.firstDay.driverAfterAnswers![0] },
+    ({ history }) => { history.laterDays![0].mentorConfirmation = undefined },
+    ({ history }) => { history.laterDays![0].driverEvaluation!.dayId = history.firstDay.id },
+    ({ history }) => { history.planEvents![0].dayId = history.laterDays![0].id },
+    ({ history }) => { history.firstDay.session = undefined },
+  ]
+  for (const corrupt of corruptions) {
+    const altered = structuredClone(doc)
+    corrupt(altered)
+    assert.throws(() => validateClosureSnapshot(altered), { code: 'storage_read' })
+  }
+  assert.doesNotThrow(() => validateClosureSnapshot(doc))
+
+  const [outer] = (await store.read()).runs
+  outer.firstDay.driverIdentity!.name = 'Endret ytre profil'
+  outer.firstDay.session!.bus1 = 'Endret ytre buss'
+  outer.content = { ...outer.content, criteria: outer.content.criteria.map(criterion => ({ ...criterion, title: 'Endret ytre kriterietekst' })) }
+  await putRun(factory, outer)
+  const historical = (await app.select(outer.id, outer.firstDay.id)).selected!
+  assert.equal(historical.fields.driverName, doc.history.firstDay.driverIdentity!.name)
+  assert.equal(historical.fields.bus1, doc.history.firstDay.session!.bus1)
+  assert.deepEqual(historical.baseline.criteria, doc.history.content.criteria)
+  assert.deepEqual(await app.readClosureSnapshot(open.id), doc)
+
+  corruptions[0](outer.closureSnapshot!)
+  await putRun(factory, outer)
+  await assert.rejects(app.read(), { code: 'storage_read' })
+  await assert.rejects(app.readClosureSnapshot(open.id), { code: 'storage_read' })
 })
 
 function openDatabase(factory: IDBFactory, version?: number, onUpgrade?: (db: IDBDatabase) => void) {
@@ -218,6 +379,20 @@ function openDatabase(factory: IDBFactory, version?: number, onUpgrade?: (db: ID
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })
+}
+
+async function putRun(factory: IDBFactory, run: Run) {
+  const db = await openDatabase(factory)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('runs', 'readwrite')
+      tx.oncomplete = () => resolve()
+      tx.onabort = () => reject(tx.error)
+      tx.objectStore('runs').put({ schemaVersion: SCHEMA_VERSION, data: run }, run.id)
+    })
+  } finally {
+    db.close()
+  }
 }
 
 const storeNames = ['meta', 'runs', 'commands']
@@ -239,9 +414,9 @@ async function entries(db: IDBDatabase) {
   })))
 }
 
-async function seedV1(rows: Entry[][]) {
+async function seedSchema(version: number, rows: Entry[][]) {
   const factory = new IDBFactory()
-  const db = await openDatabase(factory, 1, database => {
+  const db = await openDatabase(factory, version, database => {
     database.createObjectStore('meta')
     database.createObjectStore('runs').createIndex('firstDayId', 'data.firstDay.id', { unique: true })
     database.createObjectStore('commands')
@@ -257,7 +432,7 @@ async function seedV1(rows: Entry[][]) {
   return { ...fixture(factory), db }
 }
 
-test('schema 1 oppgraderes på tvers av alle lagre og forsøk fra gammel build sperres', async () => {
+test('schema 1 og 2 oppgraderes på tvers av alle lagre og forsøk fra gammel build sperres', async () => {
   const { app, store, factory } = await finishRun('1', 1)
   const expected = await store.read()
   // Ta med et ubekreftet løp og et annet aktivt dagsvalg i samme profil.
@@ -267,22 +442,26 @@ test('schema 1 oppgraderes på tvers av alle lagre og forsøk fra gammel build s
   const db = await openDatabase(factory)
   const original = await entries(db)
   db.close()
-  const before = original.map(rows => rows.map(([key, record]): Entry => [key, { ...record, schemaVersion: 1 }]))
-  const migrated = await seedV1(before)
-  migrated.db.onversionchange = () => migrated.db.close()
-  const opened = await migrated.app.open()
-  assert.equal(opened.selected?.dayId, receipt.dayId)
-  assert.deepEqual((await migrated.store.read()).runs.find(run => run.id === expected.runs[0].id), expected.runs[0])
-  assert.deepEqual(await migrated.app.executeCreate(command), receipt)
-  const current = await openDatabase(migrated.factory)
-  assert.equal(current.version, SCHEMA_VERSION)
-  assert.deepEqual(await entries(current), original)
-  current.close()
-  await assert.rejects(openDatabase(migrated.factory, 1), { name: 'VersionError' })
+  const withVersion = (schemaVersion: number) => original.map(rows => rows.map(([key, record]): Entry =>
+    [key, { ...record, schemaVersion }]))
+  for (const version of [1, 2]) {
+    const migrated = await seedSchema(version, withVersion(version))
+    migrated.db.onversionchange = () => migrated.db.close()
+    const opened = await migrated.app.open()
+    assert.equal(opened.selected?.dayId, receipt.dayId)
+    assert.deepEqual((await migrated.store.read()).runs.find(run => run.id === expected.runs[0].id), expected.runs[0])
+    assert.deepEqual(await migrated.app.executeCreate(command), receipt)
+    const current = await openDatabase(migrated.factory)
+    assert.equal(current.version, SCHEMA_VERSION)
+    assert.deepEqual(await entries(current), original)
+    current.close()
+    await assert.rejects(openDatabase(migrated.factory, version), { name: 'VersionError' })
+  }
 
+  const before = withVersion(1)
   const corrupt = structuredClone(before)
   corrupt[2][0][1].schemaVersion = 999
-  const rejected = await seedV1(corrupt)
+  const rejected = await seedSchema(1, corrupt)
   rejected.db.close()
   await assert.rejects(rejected.app.open(), { code: 'storage_open' })
   const unchanged = await openDatabase(rejected.factory)
@@ -290,7 +469,7 @@ test('schema 1 oppgraderes på tvers av alle lagre og forsøk fra gammel build s
   assert.deepEqual(await entries(unchanged), corrupt)
   unchanged.close()
 
-  const blocked = await seedV1(before)
+  const blocked = await seedSchema(1, before)
   await assert.rejects(blocked.app.open(), { code: 'storage_blocked' })
   blocked.db.close()
   const stillV1 = await openDatabase(blocked.factory, 1)

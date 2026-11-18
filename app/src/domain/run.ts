@@ -26,6 +26,7 @@ export type ContentSnapshot = {
 }
 
 export type Confirmation = { actor: Actor & { name: string }; confirmedAt: string }
+export type MentorConfirmation = Confirmation & { date: string; part: 'mentor_day' }
 export type SessionFields = { bus1: string; bus2: string; routes: string; startTime: string; endTime: string }
 
 export type Day = {
@@ -38,7 +39,7 @@ export type Day = {
   mentorNameDraft?: string
   identityConfirmed: boolean
   driverConfirmation?: Confirmation
-  mentorConfirmation?: Confirmation
+  mentorConfirmation?: MentorConfirmation
   session?: SessionFields
   driverAfterAnswers?: DriverAfterAnswer[]
   driverAfterReasonDrafts?: Baseline['reasonDrafts']
@@ -193,7 +194,8 @@ export function validateSavedRun(run: Run) {
       || !hasText(day.mentorName) || !isCalendarDate(day.date) || day.date <= previousDate
       || (day.mentorNameDraft !== undefined && (typeof day.mentorNameDraft !== 'string' || hasText(day.mentorNameDraft)))
       || (day.driverConfirmation !== undefined && !isConfirmation(day.driverConfirmation, 'sjåfør'))
-      || (day.mentorConfirmation !== undefined && !isConfirmation(day.mentorConfirmation, 'fadder'))
+      || (day.mentorConfirmation !== undefined && (!isConfirmation(day.mentorConfirmation, 'fadder')
+        || day.mentorConfirmation.date !== day.date || day.mentorConfirmation.part !== 'mentor_day'))
       || (day.identityConfirmed && !(day.number === 1 ? run.baselineConfirmation : day.driverConfirmation))
       // 1.1 lagret ingen bekreftede dager. Bare ulåst identitet kan falle tilbake på løpsprofilen.
       || (locks.identityLocked && (!hasText(day.driverIdentity?.name) || !hasText(day.driverIdentity?.employeeNumber)))

@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { approvedContent } from '../../src/content/approved-content.ts'
+import { confirmDriverDay, updateDriverDayDraft } from '../../src/domain/driver-day.ts'
+import { currentPlan } from '../../src/domain/follow-up.ts'
+import { updateMentorDay } from '../../src/domain/mentor-day.ts'
 import { reasonRequirement } from '../../src/domain/reason.ts'
 import type { Day } from '../../src/domain/run.ts'
 import { lockedRun, readSavedRun, writeSavedRun } from './saved-run-fixture.ts'
@@ -19,6 +22,8 @@ const comment = (page: Page, title: string, day = 1) => page.getByRole('button',
 const text = (page: Page, title: string, day = 1) => page.getByRole('textbox', { name: `Fadders kommentar · ${title} · Dag ${day}`, exact: true })
 const ownReason = (page: Page) => page.getByLabel('Begrunn hvorfor dette ikke er relevant')
 const rejectReason = (page: Page) => page.getByLabel('Fadders kommentar ved avslag')
+const checkDay = (page: Page) => page.getByRole('button', { name: 'Kontroller mangler' })
+const confirmDay = (page: Page) => page.getByRole('button', { name: 'Bekreft og lås dagen' })
 const answer = (page: Page, title: string, label: string, after = false, day = 1) => page.getByRole('button', {
   name: `${label} · ${title} · ${after ? 'Sjåfør · Ettervurdering' : 'Fadder · Faddervurdering'} · Dag ${day}`, exact: true,
 })
@@ -45,6 +50,49 @@ async function setDriverReason(page: Page, title: string, reason: string) {
   await answer(page, title, 'Ikke relevant', true).click()
   await ownReason(page).fill(reason)
   await page.getByRole('button', { name: 'Lagre begrunnelse' }).click()
+  await expect(status(page)).toHaveText('Lagret på denne enheten')
+}
+
+function confirmStoredAfter(run: Awaited<ReturnType<typeof readSavedRun>>, day: Day) {
+  const actor = { id: crypto.randomUUID(), role: 'sjåfør' } as const
+  const planRevision = currentPlan(run).revision
+  const inherited = new Set(day.driverAfterAnswers?.filter(answer => answer.locked).map(answer => answer.criterionId))
+  const draft = updateDriverDayDraft(run, {
+    commandId: crypto.randomUUID(), runId: run.id, expectedRevision: run.revision, actor,
+    payload: { dayId: day.id, planRevision, changes: {
+      answers: Object.fromEntries(approvedContent.criteria.filter(({ id }) => !inherited.has(id))
+        .map(({ id }) => [id, { value: 'ok', reason: null }])),
+      evaluation: { decision: 'skipped' },
+    } },
+  })
+  return confirmDriverDay(draft, {
+    commandId: crypto.randomUUID(), runId: run.id, expectedRevision: draft.revision, actor,
+    payload: { dayId: day.id, planRevision, confirmedAt: '2027-03-29T14:00:00Z' },
+  })
+}
+
+async function fillSession(page: Page, mentorName?: string) {
+  if (mentorName) await page.getByLabel('Faddernavn').fill(mentorName)
+  await page.getByLabel('Buss 1').fill('12')
+  await page.getByLabel('Linjer').fill('20 og 25')
+  await page.getByLabel('Inn-tid').fill('22:00')
+  await page.getByLabel('Ut-tid').fill('02:30')
+}
+
+async function prepareDayLock(page: Page, notRelevantId?: string) {
+  const baseline = lockedRun(await create(page), notRelevantId)
+  const run = confirmStoredAfter(baseline, baseline.firstDay)
+  const mentor = {
+    commandId: crypto.randomUUID(), runId: run.id, expectedRevision: run.revision,
+    actor: { id: crypto.randomUUID(), role: 'fadder' as const },
+  }
+  await writeSavedRun(page, updateMentorDay(run, { ...mentor, payload: { dayId: run.firstDay.id, changes: {
+    answers: Object.fromEntries(approvedContent.criteria.map(({ id }) => [id, { value: 'ok', reason: null }])),
+  } } }))
+  await page.reload()
+  await fillSession(page)
+  await mentorLink(page).click()
+  await page.getByRole('radio', { name: 'Nei', exact: true }).check()
   await expect(status(page)).toHaveText('Lagret på denne enheten')
 }
 
@@ -100,9 +148,17 @@ test('22 egne svar og kommentarer før og etter sjåførlås med innsyn begrense
   expect(mentorSaved.firstDay.mentorDay!.comments[first.id]?.text).toBe('Beholdt kommentar gjennom rollebytte')
   expect(mentorSaved.firstDay.mentorConfirmation).toBeUndefined()
   expect(mentorSaved.id).toBe(run.id)
-  await writeSavedRun(page, lockedRun(mentorSaved, second.id))
-  await page.reload()
-  await openAfter(page)
+  await page.getByRole('button', { name: 'Åpne førvurderingen' }).click()
+  const beforeChoice = (title: string, label: string) => page.getByRole('button', { name: `${label} · ${title} · Sjåfør · Førvurdering`, exact: true })
+  await beforeChoice(second.title, 'Ikke relevant').click()
+  await ownReason(page).fill('Ingen rygging')
+  await page.getByRole('button', { name: 'Lagre begrunnelse' }).click()
+  for (const criterion of approvedContent.criteria.filter(item => item.id !== second.id)) await beforeChoice(criterion.title, 'OK').click()
+  await expect(status(page)).toHaveText('Lagret på denne enheten')
+  await page.getByRole('button', { name: 'Kontroller og bekreft førvurderingen' }).click()
+  await page.getByRole('button', { name: 'Bekreft og lås', exact: true }).click()
+  await back(page).click()
+  await page.getByRole('button', { name: 'Åpne dagens ettervurdering' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.locator('.mentor-row-details')).toHaveCount(0)
   for (const criterion of approvedContent.criteria.filter(item => item.id !== second.id)) await answer(page, criterion.title, 'OK', true).click()
@@ -117,14 +173,106 @@ test('22 egne svar og kommentarer før og etter sjåførlås med innsyn begrense
   await expect(page.getByText('Sjåføren må bekrefte sin del før dagen kan låses.', { exact: false })).toHaveCount(0)
   await expect(page.locator('.mentor-review')).toHaveCount(1)
   await expect(review(page, second.title)).toContainText('Sjåførens begrunnelse · Ingen rygging')
-  await accept(page, second.title).click()
-  await expect(review(page, second.title)).toContainText('Bekreftet av Emil Eksempel')
+  await decline(page, second.title).click()
+  await rejectReason(page).fill('Vi rygget tidligere')
+  await page.getByRole('dialog').getByRole('button', { name: 'Avslå Ikke relevant' }).click()
+  await expect(review(page, second.title)).toContainText('Avslått av Emil Eksempel')
   const saved = await readSavedRun(page)
   expect(saved.firstDay.mentorDay!.answers[1].value).toBe('ok')
   expect(saved.firstDay.mentorDay!.reviews[second.id]!.answerId).toBe(saved.firstDay.driverAfterAnswers![1].id)
   expect(saved.firstDay.driverAfterAnswers![1].inheritedFrom).toBe(saved.baseline!.answers[1].id)
   expect(saved.firstDay.driverConfirmation?.actor.name).toBe('Nora Eksempel')
   expect(saved.firstDay.mentorConfirmation).toBeUndefined()
+  await page.getByRole('radio', { name: 'Ja', exact: true }).check()
+  await page.getByRole('radio', { name: 'Flere fadderdager' }).check()
+  await checkDay(page).click()
+  const missingBus = issues(page).getByRole('button', { name: 'Øktopplysninger · Oppgi minst én buss.' })
+  await missingBus.click()
+  await expect(page.getByRole('alert')).toContainText('Fullfør eller forkast planutkastet')
+  await expect(page.getByLabel('Antall ekstra dager')).toBeFocused()
+  await expect(page.getByRole('radio', { name: 'Flere fadderdager' })).toBeChecked()
+  await page.getByRole('button', { name: 'Forkast planutkast' }).click()
+  await missingBus.click()
+  await expect(page.getByLabel('Buss 1')).toBeFocused()
+  await expect(page.getByLabel('Buss 1')).toHaveAccessibleDescription(/Oppgi minst én buss/)
+  await fillSession(page, 'Ada Dagensfadder')
+  await mentorLink(page).click()
+  await page.getByRole('radio', { name: 'Ja', exact: true }).check()
+  await page.getByRole('radio', { name: 'Flere fadderdager' }).check()
+  await checkDay(page).click()
+  await issues(page).getByRole('button', { name: 'Oppfølging · Velg antall ekstra dager.' }).press('Enter')
+  await expect(page.getByLabel('Antall ekstra dager')).toBeFocused()
+  await page.getByLabel('Antall ekstra dager').selectOption('1')
+  await expect(status(page)).toHaveText('Lagret på denne enheten')
+  await answer(page, first.title, 'Ikke relevant').click()
+  await ownReason(page).fill('Utkast til ny begrunnelse')
+  await page.keyboard.press('Escape')
+  await decline(page, second.title).click()
+  await rejectReason(page).fill('Utkast til ny avslagskommentar')
+  await page.keyboard.press('Escape')
+  await expect(status(page)).toHaveText('Lagret på denne enheten')
+  await expect(page.getByText('Lagret begrunnelsesutkast · Utkast til ny begrunnelse')).toBeVisible()
+  await expect(page.getByText('Lagret avslagsutkast · Utkast til ny avslagskommentar')).toBeVisible()
+  const beforeLock = await readSavedRun(page)
+  const dialog = page.getByRole('dialog', { name: 'Bekreft faddervurderingen og lås dagen' })
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%' })
+  for (const width of [320, 360, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 660 })
+    await checkDay(page).press('Enter')
+    await expect(dialog.getByRole('heading')).toBeFocused()
+    await expect(dialog).toContainText('Ada Dagensfadder')
+    await expect(dialog).toContainText('28.03.2027')
+    await expect(dialog).toContainText('Dagens vurderinger og kommentarer låses permanent')
+    await expect(dialog).toContainText('forblir merket som utkast')
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+    if (width === 320) {
+      await page.keyboard.press('Tab')
+      await expect(dialog.getByRole('button', { name: 'Avbryt' })).toBeFocused()
+      await page.keyboard.press('Enter')
+    } else await page.keyboard.press('Escape')
+    await expect(checkDay(page)).toBeFocused()
+  }
+  expect(await readSavedRun(page)).toEqual(beforeLock)
+  await checkDay(page).click()
+  await confirmDay(page).click()
+  await expect(page.getByText('Låst. Bekreftet av Ada Dagensfadder, fadder.')).toBeFocused()
+  await expect(page.locator('time[datetime$="Z"]')).toBeVisible()
+  const locked = await readSavedRun(page)
+  expect(locked).toEqual({ ...beforeLock, revision: beforeLock.revision + 1, firstDay: {
+    ...beforeLock.firstDay, mentorConfirmation: {
+      actor: { id: expect.any(String), role: 'fadder', name: 'Ada Dagensfadder' },
+      confirmedAt: expect.stringMatching(/Z$/), date: '2027-03-28', part: 'mentor_day',
+    },
+  } })
+  await writeSavedRun(page, { ...locked, revision: locked.revision + 1, laterDays: [{
+    id: crypto.randomUUID(), number: 2, date: '2027-03-29', driverId: locked.driver.id,
+    mentorName: 'Ada Dagensfadder', identityConfirmed: false,
+  }] })
+  await back(page).click()
+  const history = page.getByRole('region', { name: 'Registrerte dager' }).getByRole('listitem')
+  await expect(history.nth(0)).toContainText('Dagen er låst')
+  await expect(history.nth(0)).toContainText('Faddervurdering bekreftet av Ada Dagensfadder, fadder.')
+  await expect(history.nth(1)).toContainText('Dagen er åpen')
+  await role(page).selectOption('sjåfør')
+  await expect(mentorLink(page)).toHaveCount(0)
+  await expect(history.nth(0)).toContainText('Dagen er låst')
+  await expect(history.nth(0)).not.toContainText('Faddervurdering bekreftet')
+  await expect(history.nth(1)).toContainText('Dagen er åpen')
+  await expect(page.getByText('Beholdt kommentar gjennom rollebytte', { exact: false })).toHaveCount(0)
+  await expect(page.getByText('Under oppfølging', { exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Inn-tid' })).toHaveCount(0)
+  await role(page).selectOption('fadder')
+  await expect(mentorLink(page)).toBeVisible()
+  await page.reload()
+  await expect(mentorLink(page)).toBeVisible({ timeout: 5000 })
+  await mentorLink(page).click()
+  await expect(page.getByText('Låst. Bekreftet av Ada Dagensfadder, fadder.')).toBeVisible()
+  await expect(page.getByText('Beholdt kommentar gjennom rollebytte', { exact: true })).toBeVisible()
+  await expect(page.getByText('Lagret begrunnelsesutkast · Utkast til ny begrunnelse')).toBeVisible()
+  await expect(page.getByText('Lagret avslagsutkast · Utkast til ny avslagskommentar')).toBeVisible()
+  await expect(page.getByText('Fadders begrunnelse · Ingen billettering')).toBeVisible()
+  await expect(review(page, second.title)).toContainText('Avslått av Emil Eksempel')
 })
 
 test('endret ettersvar i annen fane avviser gammel dialog og beholder fadders tre egne tekstfelt', async ({ page, context }) => {
@@ -320,6 +468,10 @@ test('mangellisten venter på riktig lagret faddervisning og rapporterer lesefei
   await expect.poll(() => page.evaluate(() => typeof Reflect.get(window, 'releaseMentorCheck'))).toBe('function')
   await expect(issues(page)).toContainText('Kontrollerer lagrede opplysninger')
   await expect(issues(page)).not.toContainText('Alle fadderpunkter')
+  const help = page.getByRole('button', { name: `Hjelp om ${first.title}` })
+  await expect(help).toBeDisabled()
+  await help.evaluate((button: HTMLButtonElement) => button.click())
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.evaluate(() => Reflect.get(window, 'releaseMentorCheck')())
   await expect(issues(page)).toContainText('Behandle sjåførens Ikke relevant-valg.')
   await expect(issues(page).getByRole('heading')).toBeFocused()
@@ -382,22 +534,19 @@ test('lagrer dag 2 via fadderflaten, gjenåpner rett dag og viser lagret dagslå
   await comment(page, second.title, 2).click()
   await expect(text(page, second.title, 2)).toHaveValue('Kommentar for dag to')
 
-  const locked = changed.laterDays![0]
-  await writeSavedRun(page, { ...changed, revision: changed.revision + 1, laterDays: [{
-    ...locked, driverIdentity: { name: changed.driver.name, employeeNumber: changed.driver.employeeNumber },
-    mentorConfirmation: {
-      actor: { id: locked.mentorDay!.comments[second.id]!.actor.id, role: 'fadder', name: locked.mentorName },
-      confirmedAt: '2027-03-29T15:00:00Z',
-    },
-  }] }, dayTwo.id)
+  await writeSavedRun(page, confirmStoredAfter(changed, changed.laterDays![0]), dayTwo.id)
   await page.reload()
+  await fillSession(page)
   await mentorLink(page).click()
+  for (const criterion of approvedContent.criteria.filter(({ id }) => id !== second.id)) await answer(page, criterion.title, 'OK', false, 2).click()
+  await page.getByRole('radio', { name: 'Nei', exact: true }).check()
+  await checkDay(page).click()
+  await confirmDay(page).click()
   await expect(page.getByText('Låst. Bekreftet av Dagens fadder, fadder.')).toBeVisible()
   await expect(answer(page, second.title, 'Kan bli bedre', false, 2)).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Kontroller mangler' })).toHaveCount(0)
-  await comment(page, second.title, 2).click()
-  await expect(text(page, second.title, 2)).toHaveValue('Kommentar for dag to')
-  await expect(text(page, second.title, 2)).not.toBeEditable()
+  await expect(page.getByText('Kommentar for dag to', { exact: true })).toBeVisible()
+  await expect(text(page, second.title, 2)).toHaveCount(0)
   expect((await readSavedRun(page)).firstDay).toEqual(original.firstDay)
 })
 
@@ -441,6 +590,164 @@ test('aborterte transaksjoner beholder utkast, hindrer rolle og rute og kan prø
   await expect(page.getByText('Ulagret faddertekst', { exact: false })).toHaveCount(0)
 })
 
+test('dagslåsen ruller tilbake ved abort, tåler tapt kvittering og verner mot gammel dialog', async ({ page, context }) => {
+  await page.addInitScript(() => {
+    const add = IDBObjectStore.prototype.add
+    IDBObjectStore.prototype.add = function (value, key) {
+      const request = add.call(this, value, key)
+      if (this.name === 'commands' && Reflect.get(window, 'abortMentorConfirmation')) {
+        Reflect.deleteProperty(window, 'abortMentorConfirmation')
+        request.addEventListener('success', () => this.transaction.abort())
+      }
+      return request
+    }
+    const get = IDBObjectStore.prototype.get
+    IDBObjectStore.prototype.get = function (key) {
+      if (this.name === 'commands') (Reflect.get(window, 'mentorConfirmAttempts') as string[] | undefined)?.push(String(key))
+      return get.call(this, key)
+    }
+    const getAll = IDBObjectStore.prototype.getAll
+    IDBObjectStore.prototype.getAll = function (...args) {
+      if (this.name === 'runs' && Reflect.get(window, 'failMentorConfirmationRead')) {
+        Reflect.deleteProperty(window, 'failMentorConfirmationRead')
+        throw new DOMException('Feil ved kontroll av status', 'UnknownError')
+      }
+      return getAll.apply(this, args)
+    }
+    const complete = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete')!
+    Object.defineProperty(IDBTransaction.prototype, 'oncomplete', {
+      ...complete,
+      set(handler: (event: Event) => void) {
+        complete.set!.call(this, (event: Event) => {
+          if (this.objectStoreNames.contains('commands') && Reflect.get(window, 'loseMentorConfirmationReceipt')) {
+            Reflect.deleteProperty(window, 'loseMentorConfirmationReceipt')
+            Reflect.set(window, 'failMentorConfirmationRead', true)
+            this.onabort?.(event)
+          } else handler.call(this, event)
+        })
+      },
+    })
+  })
+  await prepareDayLock(page)
+  await checkDay(page).click()
+  const stale = await context.newPage()
+  await stale.goto('/')
+  await mentorLink(stale).click()
+  await checkDay(stale).click()
+  await expect(confirmDay(stale)).toBeVisible()
+
+  await page.bringToFront()
+  const baseline = await readSavedRun(page)
+  await page.clock.setFixedTime(new Date('2027-03-28T13:00:00Z'))
+  await page.evaluate(() => {
+    Reflect.set(window, 'mentorConfirmAttempts', [])
+    Reflect.set(window, 'abortMentorConfirmation', true)
+  })
+  await confirmDay(page).click()
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Dagen kunne ikke bekreftes')
+  expect(await readSavedRun(page)).toEqual(baseline)
+  await page.keyboard.press('Escape')
+  await expect(checkDay(page)).toBeFocused()
+  await page.clock.setFixedTime(new Date('2027-03-28T14:00:00Z'))
+  await checkDay(page).click()
+  await expect(confirmDay(page)).toBeVisible()
+  await page.evaluate(() => {
+    Reflect.set(window, 'abortMentorConfirmation', true)
+    Reflect.set(window, 'failMentorConfirmationRead', true)
+  })
+  await confirmDay(page).click()
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Status for dagsbekreftelsen kunne ikke leses')
+  await expect(confirmDay(page)).toHaveCount(0)
+  const recover = page.getByRole('button', { name: 'Kontroller lagret tilstand' })
+  await page.evaluate(() => Reflect.set(window, 'failMentorConfirmationRead', true))
+  await recover.click()
+  await expect(recover).toBeEnabled()
+  expect(await page.evaluate(() => (Reflect.get(window, 'mentorConfirmAttempts') as string[]).length)).toBe(2)
+  expect(await readSavedRun(page)).toEqual(baseline)
+  await recover.click()
+  await expect(page.getByRole('alert')).toContainText('Dagen er åpen.')
+  await expect(checkDay(page)).toBeFocused()
+  await page.clock.setFixedTime(new Date('2027-03-28T15:00:00Z'))
+  await checkDay(page).click()
+  await expect(confirmDay(page)).toBeVisible()
+  await page.evaluate(() => Reflect.set(window, 'loseMentorConfirmationReceipt', true))
+  await confirmDay(page).evaluate((button: HTMLButtonElement) => { button.click(); button.click() })
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Status for dagsbekreftelsen kunne ikke leses')
+  await expect(page.locator('.baseline-state')).toHaveText('Faddervurderingen er ikke bekreftet')
+  await page.keyboard.press('Escape')
+  await expect(checkDay(page)).toBeDisabled()
+  const locked = await readSavedRun(page)
+  expect(locked.planEvents).toEqual(baseline.planEvents)
+  expect(locked.firstDay.driverConfirmation).toEqual(baseline.firstDay.driverConfirmation)
+  expect(locked.firstDay.mentorConfirmation?.confirmedAt).toBe('2027-03-28T15:00:00.000Z')
+
+  await stale.bringToFront()
+  await confirmDay(stale).click()
+  await expect(stale.getByText('Låst. Bekreftet av Emil Eksempel, fadder.')).toBeVisible()
+  await page.bringToFront()
+  await recover.click()
+  await expect(page.getByText('Låst. Bekreftet av Emil Eksempel, fadder.')).toBeFocused()
+  const attempts = await page.evaluate(() => Reflect.get(window, 'mentorConfirmAttempts') as string[])
+  expect(attempts).toHaveLength(3)
+  expect(new Set(attempts).size).toBe(3)
+  expect(await readSavedRun(page)).toEqual(locked)
+})
+
+test('mangelsjekk og gjenopprettet fadderfane viser ny dagslås, med eget utkast i konflikten', async ({ page, context }) => {
+  await prepareDayLock(page)
+  async function openOtherMentor() {
+    const other = await context.newPage()
+    await other.goto('/')
+    await mentorLink(other).click()
+    return other
+  }
+  const dirty = await openOtherMentor()
+  const observer = await openOtherMentor()
+  const writer = await openOtherMentor()
+  const dispatch = (target: Page, type: 'pagehide' | 'pageshow') =>
+    target.evaluate(name => window.dispatchEvent(new PageTransitionEvent(name, { persisted: true })), type)
+  await dirty.evaluate(() => {
+    const put = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (value, key) {
+      if (this.name === 'runs') throw new DOMException('Prøvefeil', 'QuotaExceededError')
+      return put.call(this, value, key)
+    }
+  })
+  await comment(dirty, first.title).click()
+  await text(dirty, first.title).fill('Ulagret tekst i gammel fane')
+  await expect(status(dirty)).toHaveText('Ulagrede endringer')
+  await checkDay(page).click()
+  await expect(confirmDay(page)).toBeVisible()
+  await dispatch(page, 'pagehide')
+  await expect(confirmDay(page)).toBeHidden()
+  await dispatch(dirty, 'pagehide')
+  await checkDay(writer).click()
+  await confirmDay(writer).click()
+  const locked = (target: Page) => target.getByText('Låst. Bekreftet av Emil Eksempel, fadder.', { exact: true })
+  await expect(locked(writer)).toBeVisible()
+
+  await page.bringToFront()
+  await dispatch(page, 'pageshow')
+  await expect(locked(page)).toBeFocused()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  await dirty.bringToFront()
+  await dispatch(dirty, 'pageshow')
+  await expect(locked(dirty)).toBeVisible()
+  const comparison = dirty.getByRole('region', { name: 'Lagrede fadderopplysninger' })
+  await expect(comparison).toContainText('Din kommentar · Ulagret tekst i gammel fane')
+  await expect(comparison.getByRole('button', { name: 'Lagre mitt fadderutkast' })).toHaveCount(0)
+  await comparison.getByRole('button', { name: 'Bruk lagrede opplysninger' }).click()
+  await expect(locked(dirty)).toBeVisible()
+  await expect(comparison).toHaveCount(0)
+
+  await observer.bringToFront()
+  await checkDay(observer).click()
+  await expect(locked(observer)).toBeFocused()
+  await expect(issues(observer)).toHaveCount(0)
+  await expect(observer.getByRole('dialog')).toHaveCount(0)
+})
+
 test('matrise, kommentar og avslag fungerer med tastatur og forstørret tekst i fem bredder', async ({ page }) => {
   const run = lockedRun(await create(page), last.id)
   await writeSavedRun(page, run)
@@ -465,11 +772,9 @@ test('matrise, kommentar og avslag fungerer med tastatur og forstørret tekst i 
   }
 })
 
-test('beholder kvitterte data og lagrer videre lokalt etter 60 sekunder uten nett', async ({ page, context }) => {
+test('beholder kvitterte data og låser dagen lokalt etter 60 sekunder uten nett', async ({ page, context }, testInfo) => {
   test.setTimeout(85_000)
-  const run = lockedRun(await create(page), first.id)
-  await writeSavedRun(page, run)
-  await mentorLink(page).click()
+  await prepareDayLock(page, first.id)
   await comment(page, third.title).click()
   await text(page, third.title).fill('Kvittert før nettbruddet')
   await expect(status(page)).toHaveText('Lagret på denne enheten')
@@ -481,12 +786,20 @@ test('beholder kvitterte data og lagrer videre lokalt etter 60 sekunder uten net
   await expect(review(page, first.title)).toContainText('Bekreftet av Emil Eksempel')
   await expect(status(page)).toHaveText('Lagret på denne enheten')
   expect((await readSavedRun(page)).firstDay.mentorDay!.comments[third.id]?.text).toBe('Kvittert før nettbruddet')
+  await checkDay(page).click()
+  await confirmDay(page).click()
+  await expect(page.getByText('Låst. Bekreftet av Emil Eksempel, fadder.')).toBeVisible()
   await context.setOffline(false)
+  const reopenStarted = performance.now()
   await page.reload()
+  await expect(page.getByRole('region', { name: 'Dagens faddervurdering' })).toContainText('Faddervurderingen er låst', { timeout: 5000 })
+  const reopenedIn = performance.now() - reopenStarted
+  expect(reopenedIn).toBeLessThanOrEqual(5000)
   await expect(mentorLink(page)).toBeVisible({ timeout: 5000 })
   await mentorLink(page).click()
-  await expect(answer(page, third.title, 'Kan bli bedre')).toHaveAttribute('aria-pressed', 'true')
+  await expect(answer(page, third.title, 'Kan bli bedre')).toHaveCount(0)
+  await expect(page.getByRole('group', { name: third.title, exact: true })).toContainText('Kan bli bedre')
   await expect(review(page, first.title)).toContainText('Bekreftet av Emil Eksempel')
-  await comment(page, third.title).click()
-  await expect(text(page, third.title)).toHaveValue('Kvittert før nettbruddet')
+  await expect(page.getByText('Kvittert før nettbruddet', { exact: true })).toBeVisible()
+  console.log(`${testInfo.project.name}: dagsbekreftelse etter 60 sekunder frakoblet og gjenåpning med lås på ${Math.round(reopenedIn)} ms`)
 })

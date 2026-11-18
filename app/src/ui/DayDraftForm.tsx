@@ -149,7 +149,7 @@ export function DayDraftForm({ ref, navigating, fieldToFix, ...options }: Props)
           const value = draft.fields[field]
           const editable = access[field] === 'editable'
           const issue = editor.validation[field]
-            ?? (field === fieldToFix ? driverIssues[field] : undefined)
+            ?? (field === fieldToFix ? issues[field] : undefined)
             ?? (checking || (value && (field === 'startTime' || field === 'endTime')) ? issues[field] : undefined)
           const hint = fieldHint(field)
           const description = `${id}-hint${issue ? ` ${id}-error` : ''}`

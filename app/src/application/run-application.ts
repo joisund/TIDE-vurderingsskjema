@@ -13,9 +13,9 @@ import {
 } from '../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, DriverDayChanges, SaveDriverDayDraftCommand } from '../domain/driver-day.ts'
 import {
-  driverReadyForMentorDay, driverRelevance, mentorDayOf, validateReviewRelevance, validateSaveMentorDay,
+  checkMentorDay, driverReadyForMentorDay, driverRelevance, mentorDayOf, validateConfirmMentorDayCommand, validateReviewRelevance, validateSaveMentorDay,
 } from '../domain/mentor-day.ts'
-import type { MentorDayChanges, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
+import type { ConfirmMentorDayCommand, MentorDayChanges, MentorDayReceipt, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 import { dailyFollowUp, followUpWindow, runStatus, validateFollowUpCommand } from '../domain/follow-up.ts'
 import type { FollowUpChoice, SaveFollowUpCommand } from '../domain/follow-up.ts'
 
@@ -69,9 +69,9 @@ function mentorDayView(run: Run, day: Day) {
   const editable = !dayLocks(run, day).dayLocked
   return {
     answers, comments,
-    reasonDrafts: editable ? reasonDrafts : {},
-    rejectionDrafts: editable ? rejectionDrafts : {},
+    reasonDrafts, rejectionDrafts,
     relevance: driverRelevance(run, day),
+    completion: editable ? checkMentorDay(run, day) : undefined,
     driverReady: driverReadyForMentorDay(run, day),
     driverName: day.driverConfirmation?.actor.name ?? dayDraft(run, day).driverName,
     mentorName: day.mentorName,
@@ -109,7 +109,11 @@ function toView(state: WorkspaceState) {
       planRevision: plan.revision,
       plannedLastDay: plan.lastDay,
       plannedLastDate: runDays(run).find(item => item.number === plan.lastDay)?.date,
-      days: runDays(run).map(({ id, number, date, driverConfirmation }) => ({ id, number, date, driverConfirmation })),
+      days: runDays(run).map(item => ({
+        id: item.id, number: item.number, date: item.date, driverConfirmation: item.driverConfirmation,
+        dayLocked: dayLocks(run, item).dayLocked,
+        ...(state.session.actor.role === 'fadder' && { mentorConfirmation: item.mentorConfirmation }),
+      })),
     },
   }
 }
@@ -154,6 +158,18 @@ export function driverDayConfirmationView(day: DayView, command: ConfirmDriverDa
       editable: false, confirmation, reasonDrafts: {}, evaluationOffered: false, evaluationDraft: undefined,
       evaluation: snapshotEvaluation(day.dayId, day.fields.date, day.planRevision, evaluationOffered, evaluationDraft),
     },
+  }
+}
+
+export function mentorDayConfirmationView<T extends DayView & { mentorDay: NonNullable<DayView['mentorDay']> }>(
+  day: T, { revision, confirmation }: MentorDayReceipt,
+): T {
+  return {
+    ...day, revision, dayLocked: true, identityLocked: true,
+    access: { driverName: 'locked', employeeNumber: 'locked', date: 'locked', mentorName: 'locked',
+      bus1: 'locked', bus2: 'locked', routes: 'locked', startTime: 'locked', endTime: 'locked' },
+    days: day.days.map(item => item.id === day.dayId ? { ...item, dayLocked: true, mentorConfirmation: confirmation } : item),
+    mentorDay: { ...day.mentorDay, editable: false, confirmation, completion: undefined },
   }
 }
 
@@ -335,6 +351,22 @@ export class RunApplication {
     return this.#store.saveMentorDay(snapshot, JSON.stringify([
       'save-mentor-day', runId, actor.id, actor.role, expectedRevision, payload.dayId,
       changes.answers && answerFingerprint(changes.answers), changes.comments, changes.rejectionDrafts,
+    ]))
+  }
+
+  newConfirmMentorDayCommand(actor: Actor, day: DayView): ConfirmMentorDayCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  async executeConfirmMentorDay(command: ConfirmMentorDayCommand) {
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload } }
+    validateConfirmMentorDayCommand(snapshot)
+    const { runId, actor, expectedRevision, payload } = snapshot
+    return this.#store.confirmMentorDay(snapshot, JSON.stringify([
+      'confirm-mentor-day', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.confirmedAt,
     ]))
   }
 

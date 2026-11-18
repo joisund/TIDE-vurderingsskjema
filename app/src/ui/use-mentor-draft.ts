@@ -158,6 +158,29 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
     onAdopt(latest)
   }
 
+  function accept(saved: MentorView) {
+    publish(draftOf(saved))
+    onSaved(saved)
+  }
+
+  function cleanSnapshot() {
+    const state = current.current
+    if (processing.current || active.current || state.problem || draftAttempt.current || planAttempt.current
+      || reviewAttempt.current || planChanged(state) || Object.keys(changesSince(state)).length) return undefined
+    return state.saved
+  }
+
+  function restoreLock(latest: Stored) {
+    const state = current.current
+    deadline.cancel()
+    draftAttempt.current = undefined
+    planAttempt.current = undefined
+    reviewAttempt.current = undefined
+    if (Object.keys(changesSince(state)).length || planChanged(state)) {
+      publish({ ...state, writing: false, problem: { error: new AppError('locked'), conflict: { latest } } })
+    } else adopt(latest)
+  }
+
   async function handleFailure(error: unknown, review = false) {
     report(error)
     const stale = error instanceof AppError && ['stale', 'locked', 'wrong_role', 'command_conflict'].includes(error.code)
@@ -427,22 +450,27 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
   }
 
   async function refresh() {
-    if (processing.current || reviewAttempt.current) return false
+    if (processing.current || reviewAttempt.current) return undefined
     processing.current = true
     setReviewing(true)
     try {
-      if (!await flush(true, true)) return false
+      // Et ufullstendig planutkast skal kunne vises som mangel sammen med det lagrede grunnlaget.
+      if (!await flush(true, true)) return undefined
       const { latest } = await readStored()
-      if (!latest) return false
+      if (!latest) return undefined
+      if (latest.selected.dayLocked && latest.selected.mentorDay && matchesActor(latest)) {
+        restoreLock(latest)
+        return { ...latest.selected, mentorDay: latest.selected.mentorDay }
+      }
       const state = current.current
       if (planChanged(state)) {
         if (!matchesActor(latest) || latest.selected.revision !== state.saved.revision) {
           publish({ ...state, problem: { error: new AppError('stale'), conflict: { latest } } })
-          return false
+          return undefined
         }
       } else adopt(latest)
       setNotice('')
-      return Boolean(latest.selected.mentorDay && matchesActor(latest))
+      if (latest.selected.mentorDay && matchesActor(latest)) return current.current.saved
     } finally {
       processing.current = false
       setReviewing(false)
@@ -455,6 +483,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
   const planPreview = previewFollowUp(draft.saved.mentorDay.followUp.window, draft.followUp)
   return {
     draft, changes, notice, conflict, reviewing, updateRows, updateText, flush, review, retry, refresh, refreshConflict, resolveConflict,
+    readStored, adopt, accept, cleanSnapshot, restoreLock,
     staleRole: Boolean(conflict?.latest && !matchesActor(conflict.latest)),
     reviewPending: Boolean(reviewAttempt.current),
     planDirty, planPreview, updateFollowUp, discardFollowUp, planPending: Boolean(planAttempt.current),

@@ -1,12 +1,14 @@
 import {
-  applyBaselineChanges, emptyAnswer, firstDayCanDriveAfter, validAnswerContent, validReasonDrafts,
-  validateAnswerChanges, validateAnswerSet,
+  applyBaselineChanges, baselineOf, checkBaselineAnswers, emptyAnswer, firstDayCanDriveAfter, validAnswerContent, validReasonDrafts,
+  validateAnswerChanges, validateAnswerSet, validateSavedBaseline,
 } from './baseline.ts'
 import type { Answer, AnswerDraft, BaselineChanges } from './baseline.ts'
-import { driverAfterOf } from './driver-day.ts'
+import { checkDayFields, dayDraft } from './day-draft.ts'
+import { driverAfterOf, validateSavedDriverDays } from './driver-day.ts'
+import { dailyFollowUp, validateSavedPlan } from './follow-up.ts'
 import { reasonRequirement, validateReason } from './reason.ts'
-import { AppError, dayLocks, findDay, hasText, isId, replaceDay, runDays, validateContent } from './run.ts'
-import type { Actor, Day, Run } from './run.ts'
+import { AppError, dayLocks, findDay, hasText, isConfirmationTime, isId, replaceDay, runDays, validateContent, validateSavedRun } from './run.ts'
+import type { Actor, Day, MentorConfirmation, Run, RunReceipt } from './run.ts'
 
 type MentorActor = { role: 'fadder'; id: string; name: string }
 type MentorAnswer = Answer & { actor?: MentorActor }
@@ -31,6 +33,8 @@ export type SaveMentorDayCommand = MentorCommand & { payload: { dayId: string; c
 export type ReviewRelevanceCommand = MentorCommand & {
   payload: ReviewInput & { dayId: string; criterionId: string }
 }
+export type ConfirmMentorDayCommand = MentorCommand & { payload: { dayId: string; confirmedAt: string } }
+export type MentorDayReceipt = RunReceipt & { confirmation: MentorConfirmation }
 
 export type RelevanceStatus =
   | { state: 'not_applicable'; previouslyReviewed: boolean }
@@ -58,7 +62,7 @@ export function driverRelevance(run: Run, day: Day): Record<string, RelevanceSta
       return [id, { state: 'not_applicable', previouslyReviewed: Boolean(review) }]
     }
     const target = { answerId: answer.id, answerRevision: answer.answerRevision }
-    if (!review || !sameReviewTarget(review, target)) {
+    if (!review || !validReview(review) || !sameReviewTarget(review, target)) {
       return [id, { state: review ? 'outdated' : 'pending', target, reason: answer.reason }]
     }
     return [id, { state: review.decision, target, reason: answer.reason, review }]
@@ -90,6 +94,25 @@ export function driverReadyForMentorDay(run: Run, day: Day) {
   return firstDayCanDriveAfter(run) && Boolean(day.driverConfirmation)
 }
 
+export function checkMentorDay(run: Run, day: Day) {
+  validateContent(run.content)
+  const before = baselineOf(run).answers
+  const after = driverAfterOf(run, day).answers
+  const draft = mentorDayOf(run, day)
+  validateAnswerSet(run, before, 'before', run.id)
+  validateAnswerSet(run, after, 'driver_after', day.id)
+  validateAnswerSet(run, draft.answers, 'mentor', day.id)
+  const baselineMissing = !firstDayCanDriveAfter(run) || Object.keys(checkBaselineAnswers(before)).length > 0
+  const driverAfterMissing = !day.driverConfirmation || Object.keys(checkBaselineAnswers(after)).length > 0
+  const fields = checkDayFields(dayDraft(run, day), 'day-lock')
+  const assessment = mentorAssessmentIssues(draft.answers, driverRelevance(run, day), draft.reasonDrafts)
+  const followUpMissing = !dailyFollowUp(run, day)
+  return {
+    baselineMissing, driverAfterMissing, fields, assessment, followUpMissing,
+    complete: !baselineMissing && !driverAfterMissing && !Object.keys(fields).length && !assessment.length && !followUpMissing,
+  }
+}
+
 function validateMentorAnswers(run: Run, day: Day, draft: MentorDay) {
   validateAnswerSet(run, draft.answers, 'mentor', day.id)
   if (draft.answers.some((answer, index) => answer.criterionId !== run.content.criteria[index].id
@@ -114,7 +137,10 @@ function validReview(review: ReviewInput) {
 
 export function validateSavedMentorDays(run: Run) {
   for (const day of runDays(run)) {
-    if (day.mentorDay === undefined) continue
+    if (day.mentorDay === undefined) {
+      if (day.mentorConfirmation) throw new AppError('storage_read')
+      continue
+    }
     const draft = day.mentorDay
     if (!draft || !isRecord(draft.comments) || !isRecord(draft.reviews)) throw new AppError('storage_read')
     validateMentorAnswers(run, day, draft)
@@ -131,6 +157,7 @@ export function validateSavedMentorDays(run: Run) {
         throw new AppError('storage_read')
       }
     }
+    if (day.mentorConfirmation && !checkMentorDay(run, day).complete) throw new AppError('storage_read')
   }
 }
 
@@ -160,7 +187,13 @@ export function validateReviewRelevance(command: ReviewRelevanceCommand) {
   if (typeof command.payload.criterionId !== 'string' || !validReview(command.payload)) throw new AppError('validation')
 }
 
-function writableMentorDay(run: Run, command: SaveMentorDayCommand | ReviewRelevanceCommand) {
+export function validateConfirmMentorDayCommand(command: ConfirmMentorDayCommand) {
+  validateMentorCommand(command, command.payload?.dayId)
+  if (!isConfirmationTime(command.payload.confirmedAt)
+    || Object.keys(command.payload).some(key => key !== 'dayId' && key !== 'confirmedAt')) throw new AppError('invalid_command')
+}
+
+function writableMentorDay(run: Run, command: SaveMentorDayCommand | ReviewRelevanceCommand | ConfirmMentorDayCommand) {
   if (command.runId !== run.id) throw new AppError('run_missing')
   if (command.expectedRevision !== run.revision) throw new AppError('stale')
   const day = findDay(run, command.payload.dayId)
@@ -173,6 +206,20 @@ function writableMentorDay(run: Run, command: SaveMentorDayCommand | ReviewRelev
   validateMentorAnswers(run, day, draft)
   const actor: MentorActor = { id: command.actor.id, role: 'fadder', name: day.mentorName }
   return { day, draft, actor }
+}
+
+export function confirmMentorDay(run: Run, command: ConfirmMentorDayCommand): Run {
+  validateConfirmMentorDayCommand(command)
+  const { day, draft, actor } = writableMentorDay(run, command)
+  validateSavedRun(run)
+  validateSavedBaseline(run)
+  validateSavedPlan(run)
+  validateSavedDriverDays(run)
+  validateSavedMentorDays(run)
+  if (!checkMentorDay(run, day).complete) throw new AppError('validation')
+  return replaceDay(run, { ...day, mentorDay: draft, mentorConfirmation: {
+    actor, date: day.date, part: 'mentor_day', confirmedAt: command.payload.confirmedAt,
+  } })
 }
 
 export function updateMentorDay(run: Run, command: SaveMentorDayCommand): Run {

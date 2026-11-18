@@ -7,8 +7,8 @@ import { confirmBaseline, updateBaselineDraft, validateSavedBaseline } from '../
 import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../../domain/baseline.ts'
 import { confirmDriverDay, updateDriverDayDraft, validateSavedDriverDays } from '../../domain/driver-day.ts'
 import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../../domain/driver-day.ts'
-import { reviewRelevance, updateMentorDay, validateSavedMentorDays } from '../../domain/mentor-day.ts'
-import type { ReviewRelevanceCommand, SaveMentorDayCommand } from '../../domain/mentor-day.ts'
+import { confirmMentorDay, reviewRelevance, updateMentorDay, validateSavedMentorDays } from '../../domain/mentor-day.ts'
+import type { ConfirmMentorDayCommand, MentorDayReceipt, ReviewRelevanceCommand, SaveMentorDayCommand } from '../../domain/mentor-day.ts'
 import { currentPlan, followUpWindow, runStatus, saveFollowUp, validateSavedPlan } from '../../domain/follow-up.ts'
 import type { FollowUpReceipt, SaveFollowUpCommand } from '../../domain/follow-up.ts'
 
@@ -320,6 +320,12 @@ export class IndexedDbRunStore implements RunStore {
     return this.#mutateRun(command, fingerprint, run => ({
       run: updateMentorDay(run, command), dayId: command.payload.dayId,
     }))
+  }
+
+  confirmMentorDay(command: ConfirmMentorDayCommand, fingerprint: string): Promise<MentorDayReceipt> {
+    return this.#mutateRunWithReceipt(command, fingerprint, run => ({
+      run: confirmMentorDay(run, command), dayId: command.payload.dayId,
+    }), (run, receipt) => ({ ...receipt, confirmation: findDay(run, receipt.dayId)!.mentorConfirmation! }))
   }
 
   reviewRelevance(command: ReviewRelevanceCommand, fingerprint: string): Promise<RunReceipt> {

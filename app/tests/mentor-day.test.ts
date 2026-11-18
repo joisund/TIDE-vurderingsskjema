@@ -5,9 +5,11 @@ import { DATABASE_NAME, IndexedDbRunStore, SCHEMA_VERSION } from '../src/adapter
 import { RunApplication } from '../src/application/run-application.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
 import { baselineOf, confirmBaseline, updateBaselineDraft } from '../src/domain/baseline.ts'
+import { updateDayDraft } from '../src/domain/day-draft.ts'
 import { confirmDriverDay, driverAfterOf, updateDriverDayDraft } from '../src/domain/driver-day.ts'
+import { currentPlan, saveFollowUp } from '../src/domain/follow-up.ts'
 import {
-  driverReadyForMentorDay, driverRelevance, mentorAssessmentIssues, mentorDayOf,
+  checkMentorDay, confirmMentorDay, driverReadyForMentorDay, driverRelevance, mentorAssessmentIssues, mentorDayOf,
   reviewRelevance, updateMentorDay, validateSavedMentorDays,
 } from '../src/domain/mentor-day.ts'
 import type { MentorDayChanges, ReviewInput } from '../src/domain/mentor-day.ts'
@@ -25,6 +27,7 @@ const [first, second] = ids
 const ok = { value: 'ok', reason: null } as const
 const coach = { value: 'needs_improvement', reason: null } as const
 const irrelevant = (reason: string) => ({ value: 'not_relevant' as const, reason })
+const confirmedAt = '2027-03-28T12:00:00Z'
 const app = new RunApplication(new IndexedDbRunStore(new IDBFactory()), approvedContent, newId)
 
 function start() {
@@ -43,6 +46,11 @@ function save(run: Run, changes: MentorDayChanges, day?: Day, actor = mentor) {
 function review(run: Run, id: string, choice: ReviewInput) {
   const { dayId, ...base } = command(run, mentor)
   return reviewRelevance(run, { ...base, payload: { dayId, criterionId: id, ...choice } })
+}
+
+function mentorLockCommand(run: Run, actor = mentor) {
+  const { dayId, ...base } = command(run, actor)
+  return { ...base, payload: { dayId, confirmedAt } }
 }
 
 function lockBefore(run: Run) {
@@ -64,8 +72,33 @@ function target(run: Run, criterionId: string) {
   return { answerRevision: answer.answerRevision, answerId: answer.id }
 }
 
+async function alterStoredRun(factory: IDBFactory, runId: string, alter: (run: Run) => void) {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = factory.open(DATABASE_NAME, SCHEMA_VERSION)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('runs', 'readwrite')
+      const store = tx.objectStore('runs')
+      const request = store.get(runId)
+      request.onsuccess = () => {
+        const record = request.result as { schemaVersion: number; data: Run }
+        alter(record.data)
+        store.put(record, runId)
+      }
+      tx.oncomplete = () => resolve()
+      tx.onabort = () => reject(tx.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
 test('fadder får nøyaktig 22 egne, ordnede svar per dag før sjåførens bekreftelser', () => {
   const initial = start()
+  assert.equal(checkMentorDay(initial, initial.firstDay).complete, false)
   const draft = mentorDayOf(initial, initial.firstDay)
   assert.deepEqual(draft.answers.map(answer => answer.criterionId), ids)
   assert.ok(draft.answers.every(answer => answer.phase === 'mentor' && answer.value === null && answer.answerRevision === 0))
@@ -160,11 +193,134 @@ test('behandling av ettersvar følger svar-ID og revisjon før og etter sjåfør
   assert.equal(driverRelevance(locked, locked.firstDay)[second].state, 'outdated')
   const rejected = review(locked, second, { ...target(locked, second), decision: 'rejected', rejectionComment: 'Billettering ble øvd' })
   assert.deepEqual(mentorAssessmentIssues(rejected.firstDay.mentorDay!.answers, driverRelevance(rejected, rejected.firstDay)), [])
-  const dayLocked = { ...rejected, firstDay: { ...rejected.firstDay,
-    mentorConfirmation: { actor: { ...mentor, name: fields.mentorName }, confirmedAt: '2027-03-28T12:00:00Z' } } }
+  const { dayId: mentorDayId, ...planCommand } = command(rejected, mentor)
+  const planned = saveFollowUp(rejected, { ...planCommand, payload: { dayId: mentorDayId, source: 'daily', choice: { kind: 'days', extraDays: 1 } } })
+  const { dayId: sessionDay, ...sessionCommand } = command(planned, mentor)
+  const completeDay = updateDayDraft(planned, { ...sessionCommand, payload: { dayId: sessionDay, changes: {
+    mentorName: 'Ny bekreftende fadder', bus2: '20', routes: '12 og 15', startTime: '22:30', endTime: '02:20',
+  } } })
+  assert.equal(checkMentorDay(rejected, rejected.firstDay).complete, false)
+  assert.equal(checkMentorDay(completeDay, completeDay.firstDay).complete, true)
+  assert.throws(() => confirmMentorDay(rejected, mentorLockCommand(rejected)), { code: 'validation' })
+  assert.throws(() => confirmMentorDay(completeDay, mentorLockCommand(completeDay, driver)), { code: 'wrong_role' })
+  for (const phase of ['before', 'driver_after', 'mentor'] as const) {
+    for (const damage of ['duplicate', 'other_id', 'missing'] as const) {
+      const corrupt = structuredClone(completeDay)
+      const rows = phase === 'before' ? corrupt.baseline!.answers : phase === 'driver_after'
+        ? corrupt.firstDay.driverAfterAnswers! : corrupt.firstDay.mentorDay!.answers
+      if (damage === 'duplicate') rows[0] = rows[1]
+      if (damage === 'other_id') rows[0].criterionId = 'unknown-criterion'
+      if (damage === 'missing') rows.pop()
+      assert.throws(() => checkMentorDay(corrupt, corrupt.firstDay), { code: 'storage_read' })
+      assert.throws(() => confirmMentorDay(corrupt, mentorLockCommand(corrupt)), { code: 'storage_read' })
+    }
+  }
+  for (const field of ['bus2', 'routes', 'startTime', 'endTime'] as const) {
+    const incomplete = structuredClone(completeDay)
+    incomplete.firstDay.session![field] = ''
+    const result = checkMentorDay(incomplete, incomplete.firstDay)
+    assert.deepEqual(Object.keys(result.fields), [field === 'bus2' ? 'bus1' : field])
+    assert.throws(() => confirmMentorDay(incomplete, mentorLockCommand(incomplete)), { code: 'validation' })
+  }
+  for (const field of ['name', 'employeeNumber', 'mentorName', 'date'] as const) {
+    const incomplete = structuredClone(completeDay)
+    if (field === 'name' || field === 'employeeNumber') incomplete.firstDay.driverIdentity![field] = ''
+    else incomplete.firstDay[field] = ''
+    assert.deepEqual(Object.keys(checkMentorDay(incomplete, incomplete.firstDay).fields), [field === 'name' ? 'driverName' : field])
+    assert.throws(() => confirmMentorDay(incomplete, mentorLockCommand(incomplete)), { code: 'storage_read' })
+  }
+  const noPlan = { ...completeDay, plan: undefined, planEvents: undefined, followUpDecisions: undefined }
+  assert.equal(checkMentorDay(noPlan, noPlan.firstDay).followUpMissing, true)
+  assert.throws(() => confirmMentorDay(noPlan, mentorLockCommand(noPlan)), { code: 'validation' })
+  const noAfterAck = { ...completeDay, firstDay: { ...completeDay.firstDay, driverConfirmation: undefined, driverEvaluation: undefined } }
+  assert.equal(checkMentorDay(noAfterAck, noAfterAck.firstDay).driverAfterMissing, true)
+  assert.throws(() => confirmMentorDay(noAfterAck, mentorLockCommand(noAfterAck)), { code: 'validation' })
+  const outdated = structuredClone(completeDay)
+  outdated.firstDay.mentorDay!.reviews[second]!.answerRevision--
+  assert.equal(checkMentorDay(outdated, outdated.firstDay).complete, false)
+  assert.throws(() => confirmMentorDay(outdated, mentorLockCommand(outdated)), { code: 'validation' })
+  const dayLocked = confirmMentorDay(completeDay, mentorLockCommand(completeDay))
+  assert.deepEqual(dayLocked.firstDay.mentorConfirmation, {
+    actor: { ...mentor, name: 'Ny bekreftende fadder' }, date: completeDay.firstDay.date, part: 'mentor_day', confirmedAt,
+  })
+  assert.equal(dayLocked.baselineConfirmation, completeDay.baselineConfirmation)
+  assert.equal(dayLocked.firstDay.driverConfirmation, completeDay.firstDay.driverConfirmation)
+  assert.equal(dayLocked.firstDay.driverEvaluation, completeDay.firstDay.driverEvaluation)
+  assert.equal(dayLocked.planEvents, completeDay.planEvents)
+  assert.deepEqual(currentPlan(dayLocked), { revision: 2, lastDay: 3 })
   assert.doesNotThrow(() => validateSavedMentorDays(dayLocked))
   assert.throws(() => save(dayLocked, { comments: { [second]: 'X' } }), { code: 'locked' })
   assert.throws(() => review(dayLocked, second, { ...target(dayLocked, second), decision: 'accepted' }), { code: 'locked' })
+})
+
+test('ConfirmMentorDay krever aktiv aktør og kvitterer én gang etter atomisk skriving', async () => {
+  const factory = new IDBFactory()
+  const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, newId)
+  const { actor: fadder } = await app.open()
+  const created = await app.executeCreate(app.newCreateCommand(fadder, fields))
+  const read = async () => (await app.read()).selected!
+  const allAnswers = Object.fromEntries(ids.map(id => [id, ok]))
+  const selection = { runId: created.runId, dayId: created.dayId }
+  await app.executeDayDraft(app.newDayDraftCommand(fadder, selection, created.revision,
+    { bus1: '45', routes: '9', startTime: '21:50', endTime: '00:30' }))
+  await app.executeFollowUp(app.newFollowUpCommand(fadder, await read(), { kind: 'none' }))
+  await app.executeMentorDay(app.newMentorDayCommand(fadder, await read(), { answers: allAnswers, comments: { [first]: 'Vel dokumentert' } }))
+  assert.deepEqual((await read()).mentorDay?.completion, {
+    baselineMissing: true, driverAfterMissing: true, fields: {}, assessment: [], followUpMissing: false, complete: false,
+  })
+  await assert.rejects(app.executeConfirmMentorDay(app.newConfirmMentorDayCommand(fadder, await read())), { code: 'validation' })
+  const current = await app.changeRole('sjåfør')
+  const sjåfør = current.actor
+  const before = await app.executeBaselineDraft(app.newBaselineDraftCommand(sjåfør, created.runId, current.selected!.revision, allAnswers))
+  await app.executeConfirmBaseline(app.newConfirmBaselineCommand(sjåfør, created.runId, before.revision))
+  await app.executeDriverDayDraft(app.newDriverDayDraftCommand(sjåfør, await read(), {
+    answers: allAnswers, evaluation: { decision: 'submitted', texts: { strength1: 'Rolig innbremsing' } },
+  }))
+  await app.executeConfirmDriverDay(app.newConfirmDriverDayCommand(sjåfør, await read()))
+
+  const open = (await app.changeRole('fadder')).selected!
+  const lock = app.newConfirmMentorDayCommand(fadder, open)
+  await app.changeRole('sjåfør')
+  await assert.rejects(app.executeConfirmMentorDay(lock), { code: 'stale' })
+  await app.changeRole('fadder')
+  const put = IDBObjectStore.prototype.put
+  IDBObjectStore.prototype.put = function (value, key) {
+    if (this.name === 'runs') throw new DOMException('Fullt lager', 'QuotaExceededError')
+    return put.call(this, value, key)
+  }
+  try {
+    await assert.rejects(app.executeConfirmMentorDay(lock), { code: 'storage_write' })
+  } finally {
+    IDBObjectStore.prototype.put = put
+  }
+  assert.deepEqual(await read(), open)
+  const receipt = await app.executeConfirmMentorDay(lock)
+  assert.equal(receipt.confirmation.actor.name, fields.mentorName)
+  assert.deepEqual(await app.executeConfirmMentorDay(lock), receipt)
+  await assert.rejects(app.executeConfirmMentorDay({ ...lock, payload: { ...lock.payload, confirmedAt } }), { code: 'command_conflict' })
+  await assert.rejects(app.executeConfirmMentorDay(app.newConfirmMentorDayCommand(fadder, open)), { code: 'stale' })
+  const locked = await read()
+  assert.equal(locked.revision, receipt.revision)
+  assert.equal(locked.dayLocked, true)
+  assert.deepEqual(locked.mentorDay?.confirmation, receipt.confirmation)
+  assert.deepEqual(locked.mentorDay?.followUp, open.mentorDay?.followUp)
+  assert.deepEqual(locked.driverAfter?.evaluation, open.driverAfter?.evaluation)
+  assert.deepEqual(locked.baseline.confirmation, open.baseline.confirmation)
+  await assert.rejects(app.executeDayDraft(app.newDayDraftCommand(fadder, selection, locked.revision,
+    { mentorName: 'Forsøk på nytt navn' })), { code: 'locked' })
+  await assert.rejects(app.executeMentorDay(app.newMentorDayCommand(fadder, locked, { comments: { [first]: 'Forsøk på endring' } })), { code: 'locked' })
+  await assert.rejects(app.executeFollowUp(app.newFollowUpCommand(fadder, locked, { kind: 'training' })), { code: 'locked' })
+  const changedContent = { ...approvedContent, helpVersion: 'etter-lås', criteria: approvedContent.criteria.map(row => ({ ...row, help: 'Endret global hjelp' })) }
+  const reopened = await new RunApplication(new IndexedDbRunStore(factory), changedContent, newId).open()
+  assert.deepEqual(reopened.selected, locked)
+  const driverView = (await app.changeRole('sjåfør')).selected!
+  assert.equal(driverView.dayLocked, true)
+  assert.equal(driverView.mentorDay, undefined)
+  assert.equal(driverView.days[0].mentorConfirmation, undefined)
+  await assert.rejects(app.executeDayDraft(app.newDayDraftCommand(sjåfør, selection, locked.revision,
+    { endTime: '05:40' })), { code: 'locked' })
+  await alterStoredRun(factory, created.runId, run => { run.firstDay.session!.routes = '' })
+  await assert.rejects(app.read(), { code: 'storage_read' })
 })
 
 test('IndexedDB avviser gamle roller og atomiske avbrudd, og skjuler fadderinnhold i sjåførmodellen', async () => {
@@ -241,27 +397,9 @@ test('adapteren avviser schema 1 med riktige fadder-ID-er i feil rekkefølge', a
   const created = await session.executeCreate(session.newCreateCommand(actor, fields))
   const { selected } = await session.read()
   await session.executeMentorDay(session.newMentorDayCommand(actor, selected!, { answers: { [first]: ok } }))
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = factory.open(DATABASE_NAME, SCHEMA_VERSION)
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
+  await alterStoredRun(factory, created.runId, run => {
+    const rows = run.firstDay.mentorDay!.answers
+    rows.splice(0, 2, rows[1], rows[0])
   })
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('runs', 'readwrite')
-      const store = tx.objectStore('runs')
-      const request = store.get(created.runId)
-      request.onsuccess = () => {
-        const record = request.result as { schemaVersion: number; data: Run }
-        const rows = record.data.firstDay.mentorDay!.answers
-        rows.splice(0, 2, rows[1], rows[0])
-        store.put(record, created.runId)
-      }
-      tx.oncomplete = () => resolve()
-      tx.onabort = () => reject(tx.error)
-    })
-  } finally {
-    db.close()
-  }
   await assert.rejects(session.read(), { code: 'storage_read' })
 })

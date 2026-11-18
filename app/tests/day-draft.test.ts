@@ -93,7 +93,7 @@ test('før- og etterlås fryser identiteten, fadderbytte beholder historiske bek
   const staged: Run = {
     ...run,
     baselineConfirmation: first,
-    firstDay: { ...run.firstDay, mentorConfirmation: former },
+    firstDay: { ...run.firstDay, mentorConfirmation: { ...former, date: run.firstDay.date, part: 'mentor_day' } },
     laterDays: [{ ...three[0], driverConfirmation: next }, three[1]],
   }
   const firstOnly = { ...staged, firstDay: run.firstDay }
@@ -193,7 +193,9 @@ test('schema 1-validering avviser feil bekreftelsesrolle, ødelagt bekreftelse o
     { ...confirmed, firstDay: withoutIdentity },
     { ...confirmed, baselineConfirmation: confirmation(fadder, fields.mentorName) },
     { ...confirmed, baselineConfirmation: { ...confirmed.baselineConfirmation, confirmedAt: '2028-02-30T00:00:00Z' } },
-    { ...confirmed, firstDay: { ...confirmed.firstDay, mentorConfirmation: confirmation(driver, fields.driverName) } },
+    { ...confirmed, firstDay: { ...confirmed.firstDay, mentorConfirmation: {
+      ...confirmation(driver, fields.driverName), date: confirmed.firstDay.date, part: 'mentor_day' as const,
+    } } },
     { ...run, firstDay: { ...run.firstDay, identityConfirmed: true } },
   ]) {
     assert.throws(() => validateSavedRun(invalid), { code: 'storage_read' })

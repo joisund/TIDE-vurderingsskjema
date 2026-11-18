@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 11-17-2026 21:11
-last_updated: 11-18-2026 10:36
+last_updated: 11-18-2026 11:14
 project: Digital kjørevurdering
 project_key: NOKEY
 tracking_system: file-system
@@ -42,7 +42,7 @@ development_status:
   1-4-fullføre-sjåførens-daglige-ettervurdering: review
   1-5-registrere-faddervurdering-og-behandle-relevansvalg: review
   1-6-planlegge-videre-oppfølging-og-siste-dag: review
-  1-7-bekrefte-fadderdelen-og-låse-dagen-permanent: backlog
+  1-7-bekrefte-fadderdelen-og-låse-dagen-permanent: review
   1-8-fortsette-løpet-med-nye-dager-og-bevart-historikk: backlog
   epic-1-retrospective: optional
 

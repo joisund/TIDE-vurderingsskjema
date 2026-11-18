@@ -12,7 +12,7 @@ import { reasonRequirement, validateReason } from '../domain/reason.ts'
 import type { Actor, Criterion, RunReceipt } from '../domain/run.ts'
 import { AssessmentMatrix, Modal } from './AssessmentMatrix.tsx'
 import { answerText, focusMatrixField } from './assessment-fields.ts'
-import { CalendarDate } from './CalendarDate.tsx'
+import { CalendarDate, ConfirmationTime } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
 import { assessmentOf, evaluationDecisionOf, useAssessmentDraft } from './use-assessment-draft.ts'
 import type { AssessmentPhase } from './use-assessment-draft.ts'
@@ -30,10 +30,6 @@ type Props = {
   onConfirmIssue: (message: string) => void
   navigating: boolean
 }
-
-const confirmationDate = new Intl.DateTimeFormat('nb-NO', {
-  dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Oslo',
-})
 
 const evaluationLabels = {
   strength1: 'Styrke 1', strength2: 'Styrke 2', strength3: 'Styrke 3',
@@ -363,10 +359,7 @@ export function AssessmentForm({ ref, onDayField, onConfirmIssue, navigating, ..
       </p>
       {confirmation && (
         <p className="hint">
-          Bekreftelsestid{' '}
-          <time dateTime={confirmation.confirmedAt}>
-            {confirmationDate.format(new Date(confirmation.confirmedAt))}
-          </time>
+          Bekreftelsestid <ConfirmationTime value={confirmation.confirmedAt} />
         </p>
       )}
       <p className="save-status" role={dialog ? undefined : 'status'} aria-atomic={dialog ? undefined : true}>{status}</p>

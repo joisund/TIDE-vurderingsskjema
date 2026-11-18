@@ -5,9 +5,11 @@ import { DATABASE_NAME, IndexedDbRunStore, SCHEMA_VERSION } from '../src/adapter
 import { RunApplication } from '../src/application/run-application.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
 import { confirmBaseline, updateBaselineDraft } from '../src/domain/baseline.ts'
+import { updateDayDraft } from '../src/domain/day-draft.ts'
 import { confirmDriverDay, offersEvaluation, updateDriverDayDraft, validateSavedDriverDays } from '../src/domain/driver-day.ts'
 import { currentPlan, dailyFollowUp, runStatus, saveFollowUp, validateSavedPlan } from '../src/domain/follow-up.ts'
 import type { FollowUpChoice, SaveFollowUpCommand } from '../src/domain/follow-up.ts'
+import { confirmMentorDay, updateMentorDay } from '../src/domain/mentor-day.ts'
 import { createRun } from '../src/domain/run.ts'
 import type { Actor, Day, Run } from '../src/domain/run.ts'
 
@@ -123,7 +125,7 @@ test('dagslåsen verner beslutningen mens separat utvidelse får en ny ID og fem
   const current = followUp(fixture(), extra(1))
   const day = current.firstDay
   const locked: Run = { ...current, firstDay: {
-    ...day, mentorConfirmation: { actor: { ...mentor, name: 'Emil Eksempel' }, confirmedAt },
+    ...day, mentorConfirmation: { actor: { ...mentor, name: 'Emil Eksempel' }, confirmedAt, date: day.date, part: 'mentor_day' },
   } }
   assert.throws(() => followUp(locked, no), { code: 'locked' })
   assert.throws(() => saveFollowUp(current, command(current, extra(1), day.id, 'extension')), { code: 'validation' })
@@ -281,9 +283,17 @@ test('applikasjonen kvitterer og gjentar separat utvidelse fra en lagret, låst 
   const initial = beforeLocked(followUp(fixture(), extra(1)))
   const ready = afterDraft(initial, initial.firstDay, { answers, evaluation: { decision: 'skipped' } })
   const driverLocked = confirmDriverDay(ready, afterCommand(ready, ready.firstDay))
-  const locked: Run = { ...driverLocked, firstDay: { ...driverLocked.firstDay,
-    mentorConfirmation: { actor: { ...mentor, name: fields.mentorName }, confirmedAt },
-  } }
+  const dayId = driverLocked.firstDay.id
+  const meta = { runId: driverLocked.id, actor: mentor }
+  const withFields = updateDayDraft(driverLocked, { ...meta, commandId: id(), expectedRevision: driverLocked.revision,
+    payload: { dayId, changes: { bus1: '12', routes: '20', startTime: '21:00', endTime: '03:30' } },
+  })
+  const assessed = updateMentorDay(withFields, { ...meta, commandId: id(), expectedRevision: withFields.revision,
+    payload: { dayId, changes: { answers } },
+  })
+  const locked = confirmMentorDay(assessed, { ...meta, commandId: id(), expectedRevision: assessed.revision,
+    payload: { dayId, confirmedAt },
+  })
   const { app, actor, selected } = await storedFixture(locked)
   const daily = selected.mentorDay!.followUp.decision
   await assert.rejects(app.executeFollowUp(app.newFollowUpCommand(actor, selected, no)), { code: 'locked' })

@@ -8,8 +8,8 @@ import { CreateRunForm } from './CreateRunForm.tsx'
 import { CalendarDate } from './CalendarDate.tsx'
 import { AssessmentForm } from './AssessmentForm.tsx'
 import { DayDraftForm } from './DayDraftForm.tsx'
-import type { DayDraftHandle } from './DayDraftForm.tsx'
 import { MentorAssessmentForm } from './MentorAssessmentForm.tsx'
+import type { MentorAssessmentHandle } from './MentorAssessmentForm.tsx'
 import { copyForStartup, explain } from './app-errors.ts'
 
 type Screen = 'loading' | 'unavailable' | 'runs' | 'create' | 'day' | 'baseline' | 'after' | 'mentor'
@@ -51,7 +51,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   const [navigationError, setNavigationError] = useState('')
   const [mentorRestore, setMentorRestore] = useState<MentorRestore>()
   const [online, setOnline] = useState(() => navigator.onLine)
-  const editor = useRef<DayDraftHandle>(null)
+  const editor = useRef<MentorAssessmentHandle>(null)
   const [fieldToFix, setFieldToFix] = useState<DayField>()
   const focusDayField = useRef<DayField>(undefined)
   const roleSelect = useRef<HTMLSelectElement>(null)
@@ -290,6 +290,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       const next = await application.withOpenStorage(() => resume
         ? application.changeRole('fadder', selection)
         : application.read(selection))
+      const latest = next.selected
       if (next.actor.id !== view.actor.id || next.actor.role !== view.actor.role) {
         if (resume) throw new AppError('wrong_role')
         if (editor.current && !await editor.current.flush()) {
@@ -298,6 +299,12 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
         }
         focusHeading.current = true
         replaceRoleView(next)
+      } else if (latest?.dayLocked && !selected.dayLocked) {
+        flushSync(() => {
+          editor.current?.restoreLock?.({ ...next, selected: latest })
+          clearMentorRestore()
+        })
+        return
       }
       flushSync(() => setMentorRestore(undefined))
       const dialog = cachedMentorDialog.current
@@ -510,6 +517,10 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                 <dd>Dag {selected.plannedLastDay}</dd>
                 <dd>{selected.plannedLastDate ? <CalendarDate value={selected.plannedLastDate} /> : 'Dato ikke registrert'}</dd>
               </div>
+              <div>
+                <dt>Dag {selected.day}</dt>
+                <dd>{selected.dayLocked ? 'Dagen er låst' : 'Dagen er åpen'}</dd>
+              </div>
             </dl>
             <section className="baseline-entry" aria-labelledby="baseline-entry-heading">
               <h2 id="baseline-entry-heading">Førvurdering for løpet</h2>
@@ -535,14 +546,16 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
                   onClick={() => showAssessmentScreen('mentor')}>Åpne dagens faddervurdering</button>
               </section>
             )}
-            {(selected.days.length > 1 || selected.days.some(day => day.driverConfirmation)) && (
+            {(selected.days.length > 1 || selected.days.some(day => day.driverConfirmation || day.dayLocked)) && (
               <section className="baseline-entry" aria-labelledby="day-history-heading">
                 <h2 id="day-history-heading">Registrerte dager</h2>
                 <ul className="day-history">
                   {selected.days.map(day => (
                     <li key={day.id}>
                       <p>Dag {day.number} · <CalendarDate value={day.date} /></p>
+                      <p>{day.dayLocked ? 'Dagen er låst' : 'Dagen er åpen'}</p>
                       {day.driverConfirmation && <p>Ettervurdering bekreftet av {day.driverConfirmation.actor.name}, sjåfør.</p>}
+                      {day.mentorConfirmation && <p>Faddervurdering bekreftet av {day.mentorConfirmation.actor.name}, fadder.</p>}
                       {day.id !== selected.dayId && <button type="button" className="button secondary" aria-disabled={busy}
                         onClick={() => openRun(selected.id, day.id)}>Åpne dag {day.number}</button>}
                     </li>
@@ -576,7 +589,8 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
             <div hidden={Boolean(mentorRestore)}>
               <MentorAssessmentForm key={`mentor/${view.actor.id}/${selected.id}/${selected.dayId}`} ref={editor}
                 initial={{ ...selected, mentorDay: selected.mentorDay }} actor={view.actor} application={application}
-                report={report} onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy} />
+                report={report} onSaved={acceptDaySave} onAdopt={adoptStoredDay} navigating={busy}
+                onDayField={field => showAssessmentScreen('day', field)} onDriverPart={part => showAssessmentScreen(part)} />
               <div className="actions">
                 <button type="button" className="button secondary" aria-disabled={busy}
                   onClick={() => showAssessmentScreen('day')}>Til dagsoversikten</button>

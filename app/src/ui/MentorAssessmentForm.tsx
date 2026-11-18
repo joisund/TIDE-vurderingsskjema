@@ -1,6 +1,7 @@
 import { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, Ref } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
+import { availableExtraDays, previewFollowUp } from '../domain/follow-up.ts'
 import { mentorAssessmentIssues } from '../domain/mentor-day.ts'
 import type { ReviewTarget } from '../domain/mentor-day.ts'
 import { reasonRequirement, validateReason } from '../domain/reason.ts'
@@ -9,6 +10,7 @@ import { AssessmentMatrix, Modal } from './AssessmentMatrix.tsx'
 import { answerText, focusMatrixField } from './assessment-fields.ts'
 import { CalendarDate } from './CalendarDate.tsx'
 import { explain } from './app-errors.ts'
+import { FollowUpConflict, FollowUpForm } from './FollowUpForm.tsx'
 import { useMentorDraft } from './use-mentor-draft.ts'
 import type { MentorView } from './use-mentor-draft.ts'
 
@@ -58,8 +60,16 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
   const answered = Object.values(rows).filter(row => row.value !== null).length
   const reviewCount = issues.filter(issue => issue.field === 'review').length
   const previous = conflict?.latest?.selected.mentorDay
-  const status = draft.writing ? 'Lagrer …' : draft.problem ? 'Ulagrede endringer'
+  const planView = previous && conflict?.latest ? { ...conflict.latest.selected, mentorDay: previous } : saved
+  const conflictProposal = previous && editor.planDirty && previewFollowUp(previous.followUp.window, draft.followUp)
+  const planBlocked = !canEdit || blocked || Boolean(draft.problem?.savedPlan || (draft.problem && editor.planPending))
+  const planIssue = 'field' in editor.planPreview ? editor.planPreview : undefined
+  const status = draft.writing ? 'Lagrer …'
+    : draft.problem?.savedPlan ? (editor.dirty ? 'Oppfølgingen er lagret. Andre endringer er ikke lagret.' : 'Lagret på denne enheten')
+    : draft.problem ? 'Ulagrede endringer'
+    : editor.planDirty && planIssue ? 'Ufullstendig planutkast · Fullfør eller forkast utkastet før du går videre.'
     : editor.dirty ? 'Lagrer …' : 'Lagret på denne enheten'
+  const retryLabel = draft.problem?.savedPlan ? 'Les lagrede opplysninger på nytt' : 'Prøv igjen'
   const modalStatus = dialog && dialog.kind !== 'help'
 
   useImperativeHandle(ref, () => ({ flush: editor.flush }))
@@ -210,11 +220,13 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
       {notice && <p className="error-panel" role="alert">{notice}</p>}
       {draft.problem && (
         <div className="day-problem">
-          <p className="error-panel" role="alert">Endringene er ikke lagret. Prøv igjen. {conflict
-            ? 'Kontroller de lagrede opplysningene før du fortsetter.'
-            : editor.reviewPending ? 'Prøv igjen for å lagre relevansavgjørelsen.' : explain(draft.problem.error)}</p>
+          <p className="error-panel" role="alert">{draft.problem.savedPlan
+            ? conflict ? 'Oppfølgingen ble lagret. Løpet er oppdatert. Kontroller de andre endringene.'
+              : 'Oppfølgingen ble lagret. Gjeldende lagrede opplysninger kunne ikke leses.'
+            : `Endringene er ikke lagret. Prøv igjen. ${conflict ? 'Kontroller de lagrede opplysningene før du fortsetter.'
+              : editor.reviewPending ? 'Prøv igjen for å lagre relevansavgjørelsen.' : explain(draft.problem.error)}`}</p>
           {!conflict && <button className="button secondary" type="button" disabled={busy}
-            onClick={() => void editor.retry()}>Prøv igjen</button>}
+            onClick={() => void editor.retry()}>{retryLabel}</button>}
         </div>
       )}
       {conflict && (
@@ -223,6 +235,8 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
           {conflict.latest ? (
             <>
               <p>Sammenlign fadderutkastet med de lagrede opplysningene.</p>
+              {editor.planDirty && <FollowUpConflict saved={conflict.latest.selected} value={draft.followUp}
+                proposal={conflictProposal || undefined} />}
               <ul className="assessment-text">
                 {mentorDay.criteria.filter(({ id }) => changes.answers?.[id] || changes.comments?.[id] !== undefined
                   || changes.rejectionDrafts?.[id] !== undefined).map(({ id, title }) => {
@@ -252,7 +266,8 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
                 {editor.staleRole && <button className="button secondary" type="button" disabled={blocked}
                   onClick={() => void editor.refreshConflict(true)}>Gjenoppta som fadder</button>}
                 {!editor.staleRole && previous?.editable && <button className="button primary" type="button" disabled={blocked}
-                  onClick={() => void editor.resolveConflict(true)}>Lagre mitt fadderutkast</button>}
+                  onClick={() => void editor.resolveConflict(true)}>{conflictProposal && 'field' in conflictProposal
+                    ? 'Behold fadderutkastet for redigering' : 'Lagre mitt fadderutkast'}</button>}
                 <button className="button secondary" type="button" disabled={blocked}
                   onClick={() => void editor.resolveConflict(false)}>Bruk lagrede opplysninger</button>
               </div>
@@ -266,16 +281,21 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
           )}
         </section>
       )}
+      <FollowUpForm view={planView} value={draft.followUp} result={editor.planPreview} dirty={editor.planDirty}
+        showIssues={showIssues} blocked={planBlocked} saving={draft.writing || editor.planPending} pending={editor.planPending}
+        failed={Boolean(draft.problem)} currentLastDay={conflict?.latest?.selected.plannedLastDay ?? saved.plannedLastDay}
+        onChange={editor.updateFollowUp} onDiscard={editor.discardFollowUp} onSave={() => void editor.flush()} />
       {mentorDay.editable && <div className="actions mentor-completion">
         <button type="button" className="button secondary" aria-disabled={blocked || Boolean(conflict)}
           onClick={() => void showMissing()}>Kontroller mangler</button>
       </div>}
       {completeness && (
-        <section className={showIssues && issues.length ? 'error-panel baseline-missing' : 'baseline-missing'} aria-labelledby="mentor-missing-heading">
+        <section className={showIssues && (issues.length || planIssue) ? 'error-panel baseline-missing' : 'baseline-missing'} aria-labelledby="mentor-missing-heading">
           <h2 id="mentor-missing-heading" tabIndex={-1} ref={issueHeading}>Mangler i faddervurderingen</h2>
           <p aria-live="polite">{completeness === 'checking' ? 'Kontrollerer lagrede opplysninger …'
             : completeness === 'failed' ? 'Kontrollen kunne ikke fullføres. Prøv igjen.' : null}</p>
-          {showIssues && (issues.length ? <ul>{issues.map(issue => {
+          {showIssues && !issues.length && <p>Alle fadderpunkter og aktuelle relevansvalg er behandlet.</p>}
+          {showIssues && (issues.length > 0 || planIssue) && <ul>{issues.map(issue => {
             const text = `${mentorDay.criteria.find(({ id }) => id === issue.criterionId)?.title} · ${issue.message}`
             return (
               <li key={`${issue.criterionId}/${issue.field}`}>
@@ -284,7 +304,13 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
                 </button> : text}
               </li>
             )
-          })}</ul> : <p>Alle fadderpunkter og aktuelle relevansvalg er behandlet.</p>)}
+          })}{planIssue && <li>
+            {planBlocked || editor.planPending ? `Oppfølging · ${planIssue.message}` : <button className="issue-link" type="button" onClick={() => focusMatrixField(
+              planIssue.field === 'need' ? 'follow-up-yes' : planIssue.field === 'extraDays' ? 'follow-up-count'
+                : availableExtraDays(mentorDay.followUp.window).length && draft.followUp.type !== 'training'
+                  ? 'follow-up-type' : 'follow-up-training',
+            )}>Oppfølging · {planIssue.message}</button>}
+          </li>}</ul>}
         </section>
       )}
       <AssessmentMatrix criteria={mentorDay.criteria} answers={mentorDay.answers} rows={rows} issues={answerIssues}
@@ -326,9 +352,10 @@ export function MentorAssessmentForm({ ref, navigating, ...options }: Props) {
               <p className="save-status" role="status" aria-atomic="true">{status}</p>
               {draft.problem && <p className="field-error" role="alert">{conflict
                 ? 'Lukk dialogen for å kontrollere de lagrede opplysningene.'
-                : 'Endringene er ikke lagret. Prøv igjen.'}</p>}
+                : draft.problem.savedPlan ? 'Oppfølgingen ble lagret. Gjeldende lagrede opplysninger kunne ikke leses.'
+                  : 'Endringene er ikke lagret. Prøv igjen.'}</p>}
               {draft.problem && !conflict && <button type="button" className="button secondary" disabled={busy}
-                onClick={() => void editor.retry()}>Prøv igjen</button>}
+                onClick={() => void editor.retry()}>{retryLabel}</button>}
               <div className="actions">
                 <button type="button" className="button secondary" onClick={dismiss}>Avbryt</button>
                 <button type="submit" className="button primary" disabled={!canEdit || blocked || Boolean(draft.problem)}>

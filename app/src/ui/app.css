@@ -317,6 +317,31 @@ button.matrix-choice { cursor: pointer; }
 .matrix-choice, .help-trigger { scroll-margin-block-start: calc(var(--matrix-heading-height) + 10px); }
 .choice-dot { width: 22px; height: 22px; border: 1.5px solid var(--ink); border-radius: 50%; }
 [aria-pressed='true'] .choice-dot, .choice-selected { border: 6px solid var(--primary); }
+
+.follow-up {
+  margin-block: 16px;
+  padding-block: 12px;
+  border-block: 1px solid var(--tide-sand);
+  overflow-wrap: anywhere;
+}
+
+.follow-up h2 { margin-bottom: 8px; }
+.follow-up-fields, .follow-up fieldset { display: grid; gap: 8px; }
+.follow-up fieldset { min-inline-size: 0; border: 0; padding: 0; margin: 12px 0 0; }
+.follow-up legend { font-size: .875rem; font-weight: 650; padding: 0; }
+.follow-up-option { display: flex; align-items: center; gap: 12px; min-height: 48px; cursor: pointer; }
+.follow-up-option input {
+  flex: none;
+  width: 22px;
+  min-width: 0;
+  height: 22px;
+  min-height: 0;
+  margin: 0 0 0 5px;
+  accent-color: var(--primary);
+}
+.follow-up-option:has(input:disabled) { cursor: default; }
+.follow-up-history { margin-block: 8px; padding-inline-start: 24px; }
+.follow-up-history li { padding-block: 8px; }
 .matrix-state { font-weight: 650; margin-top: 4px; }
 .matrix-reason { grid-column: 1 / -1; padding: 0 5px 12px; font-size: .8125rem; }
 .mentor-completion { margin-block: 12px; }

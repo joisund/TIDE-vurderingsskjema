@@ -4,10 +4,13 @@ import {
 } from './baseline.ts'
 import type { AnswerDraft, BaselineChanges, DriverAfterAnswer } from './baseline.ts'
 import { checkDayFields, dayDraft } from './day-draft.ts'
+import { currentPlan, plannedDayAt } from './follow-up.ts'
+import type { RunPlan } from './follow-up.ts'
 import { AppError, dayLocks, findDay, isConfirmationTime, replaceDay, runDays, validateContent } from './run.ts'
 import type { Actor, Day, Run } from './run.ts'
 
-export type RunPlan = { revision: number; lastDay: Day['number'] }
+export { currentPlan } from './follow-up.ts'
+export type { RunPlan } from './follow-up.ts'
 
 export const evaluationFields = ['strength1', 'strength2', 'strength3', 'growth1', 'growth2', 'growth3'] as const
 export type EvaluationField = typeof evaluationFields[number]
@@ -35,19 +38,14 @@ export type ConfirmDriverDayCommand = DriverCommand & {
   payload: { dayId: string; planRevision: number; confirmedAt: string }
 }
 
-export function currentPlan(run: Run): RunPlan {
-  return run.plan ?? { revision: 1, lastDay: run.initialLastDay }
-}
-
 export function offersEvaluation(plan: RunPlan, day: Day) {
   return day.number === 1 || day.number === plan.lastDay
 }
 
 function knownOffer(run: Run, day: Day, revision: number): boolean | undefined {
-  const plan = currentPlan(run)
-  if (revision === plan.revision) return offersEvaluation(plan, day)
-  if (revision === 1) return day.number === 1 || day.number === run.initialLastDay
-  return day.number === 1 ? true : undefined
+  if (day.number === 1) return true
+  const lastDay = plannedDayAt(run, revision)
+  return lastDay === undefined ? undefined : day.number === lastDay
 }
 
 export function applyEvaluationChanges(previous: EvaluationDraft | undefined, change: NonNullable<DriverDayChanges['evaluation']>, offerPlanRevision: number): EvaluationDraft {
@@ -92,10 +90,6 @@ function validTexts(texts: unknown): texts is EvaluationTexts {
 export function validateSavedDriverDays(run: Run) {
   const plan = currentPlan(run)
   const days = runDays(run)
-  if (!isPlanRevision(plan.revision) || ![1, 2, 3, 4, 5].includes(plan.lastDay)
-    || plan.lastDay < Math.max(run.initialLastDay, days.length)
-    || (plan.revision === 1 && plan.lastDay !== run.initialLastDay)) throw new AppError('storage_read')
-
   for (const day of days) {
     const { driverAfterAnswers, driverAfterReasonDrafts, driverConfirmation, evaluationDraft, driverEvaluation } = day
     if (!firstDayCanDriveAfter(run)) {

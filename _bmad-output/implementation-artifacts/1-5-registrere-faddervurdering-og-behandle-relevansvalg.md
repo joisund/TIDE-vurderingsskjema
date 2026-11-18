@@ -139,6 +139,8 @@ Etter de tre gjennomgangene ble reviewforsøket bundet til opprinnelig mål før
 
 Sluttbygget `story-1.5-20261118-r2` bestod bygg/typekontroll, lint, 36 Node-prøver og 174 Playwright-prøver i Chromium, Firefox og WebKit. Fadder kunne lagre nytt svar og behandling etter minst 60 sekunder simulert nettbrudd i hver motor. Dag 2 og dagslås ble prøvd med lagrede fiksturer. Den egne, faktiske Chromium-prøven bekreftet `pageshow.persisted` etter navigasjon mellom lokale adresser og rollebytte i en annen fane. Fadderfelt var skjult allerede ved gjenoppretting, og fadder-DOM ble fjernet etter lesing av autoritativ sjåførrolle. Sluttbygget bestod også faktisk 400 %-zoom og Edge 157.0.4341.60 ved 316 CSSpx. Oppgradering fra det frosne 1.4-bygget i samme Chromium-origin beholdt identiteter, før- og etterlås, egenevaluering og opprinnelig begrunnelse. Fadderdelens egne 22 posisjoner ble lagt til i bruk, og arven ble behandlet på ettersvaret. Fysisk verifikasjon gjenstår.
 
+På Windows leste NVDA 2026.3.1 i Edge 157.0.4341.60 den frosne kopiens dialognavn «Begrunn Ikke relevant», rolle og fiktiv fadder, faddervurdering på dag 1, kriteriet «Korrekt uniform/hygiene», feltetikett og A10-hjelp. Videre fokusering ble hindret av en OS-overflate. Faktisk opplesing av feil ved innsending, fokusretur, dynamisk lagringsstatus og de øvrige hjelpemiddel-/plattformprøvene står åpne.
+
 ## Spec Change Log
 
 ## Review Triage Log

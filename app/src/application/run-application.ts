@@ -16,12 +16,14 @@ import {
   driverReadyForMentorDay, driverRelevance, mentorDayOf, validateReviewRelevance, validateSaveMentorDay,
 } from '../domain/mentor-day.ts'
 import type { MentorDayChanges, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
+import { dailyFollowUp, followUpWindow, runStatus, validateFollowUpCommand } from '../domain/follow-up.ts'
+import type { FollowUpChoice, SaveFollowUpCommand } from '../domain/follow-up.ts'
 
 function summary(run: Run) {
   const identity = run.firstDay.driverIdentity ?? run.driver
   return {
     id: run.id,
-    status: run.lifecycle === 'closed' ? 'Avsluttet' : 'Pågående',
+    status: runStatus(run),
     driverName: identity.name,
     employeeNumber: identity.employeeNumber,
     firstDate: run.firstDay.date,
@@ -76,6 +78,11 @@ function mentorDayView(run: Run, day: Day) {
     criteria: run.content.criteria,
     confirmation: day.mentorConfirmation,
     editable,
+    followUp: {
+      decision: dailyFollowUp(run, day),
+      window: followUpWindow(run, day),
+      history: run.planEvents ?? [],
+    },
   }
 }
 
@@ -345,6 +352,23 @@ export class RunApplication {
     return this.#store.reviewRelevance(snapshot, JSON.stringify([
       'review-driver-relevance', runId, actor.id, actor.role, expectedRevision, payload.dayId,
       payload.criterionId, payload.answerId, payload.answerRevision, payload.decision, payload.rejectionComment,
+    ]))
+  }
+
+  newFollowUpCommand(actor: Actor, day: DayView, choice: FollowUpChoice, source: SaveFollowUpCommand['payload']['source'] = 'daily'): SaveFollowUpCommand {
+    return {
+      commandId: this.#newId(), runId: day.id, actor: { ...actor }, expectedRevision: day.revision,
+      payload: { dayId: day.dayId, source, choice: { ...choice } },
+    }
+  }
+
+  async executeFollowUp(command: SaveFollowUpCommand) {
+    validateFollowUpCommand(command)
+    const snapshot = { ...command, actor: { ...command.actor }, payload: { ...command.payload, choice: { ...command.payload.choice } } }
+    const { runId, actor, expectedRevision, payload } = snapshot
+    return this.#store.saveFollowUp(snapshot, JSON.stringify([
+      'save-follow-up', runId, actor.id, actor.role, expectedRevision, payload.dayId, payload.source,
+      payload.choice.kind, payload.choice.kind === 'days' ? payload.choice.extraDays : null,
     ]))
   }
 

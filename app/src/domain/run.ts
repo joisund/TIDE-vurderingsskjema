@@ -1,5 +1,6 @@
 import type { Baseline, DriverAfterAnswer } from './baseline.ts'
-import type { EvaluationDraft, DriverEvaluation, RunPlan } from './driver-day.ts'
+import type { EvaluationDraft, DriverEvaluation } from './driver-day.ts'
+import type { FollowUpDecision, PlanEvent, RunPlan } from './follow-up.ts'
 import type { MentorDay } from './mentor-day.ts'
 
 export type Role = 'fadder' | 'sjåfør'
@@ -55,6 +56,9 @@ export type Run = {
   driver: { id: string; name: string; employeeNumber: string }
   initialLastDay: StartPlan
   plan?: RunPlan
+  planHistoryBase?: RunPlan
+  followUpDecisions?: FollowUpDecision[]
+  planEvents?: PlanEvent[]
   firstDay: FirstDay
   laterDays?: (Day & { number: 2 | 3 | 4 | 5 })[]
   baseline?: Baseline

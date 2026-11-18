@@ -122,6 +122,7 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
   function navigate(next: Screen) {
     focusHeading.current = true
     if (next !== 'day') setFieldToFix(undefined)
+    if (next !== 'mentor') clearMentorRestore()
     setScreen(next)
   }
 
@@ -263,7 +264,10 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       setReceipt(undefined)
       setStorageStatus('')
       attempt.current = undefined
-      if (screen === 'mentor' && !next.selected?.mentorDay) setScreen('day')
+      if (screen === 'mentor' && !next.selected?.mentorDay) {
+        clearMentorRestore()
+        setScreen('day')
+      }
     })
     flushSync(() => { setView(next) })
     const fieldTarget = screen === 'day' && fieldToFix && next.actor.role === 'fadder'
@@ -271,6 +275,11 @@ export function App({ application, logo, prepare, requestPersistence, report }: 
       : null
     if (fieldTarget) fieldTarget.focus()
     else if (returnFocus) roleSelect.current?.focus()
+  }
+
+  function clearMentorRestore() {
+    setMentorRestore(undefined)
+    cachedMentorDialog.current = undefined
   }
 
   async function checkRestoredMentor(resume = false) {

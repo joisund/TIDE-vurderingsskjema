@@ -9,6 +9,8 @@ import { confirmDriverDay, updateDriverDayDraft, validateSavedDriverDays } from 
 import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../../domain/driver-day.ts'
 import { reviewRelevance, updateMentorDay, validateSavedMentorDays } from '../../domain/mentor-day.ts'
 import type { ReviewRelevanceCommand, SaveMentorDayCommand } from '../../domain/mentor-day.ts'
+import { currentPlan, followUpWindow, runStatus, saveFollowUp, validateSavedPlan } from '../../domain/follow-up.ts'
+import type { FollowUpReceipt, SaveFollowUpCommand } from '../../domain/follow-up.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
 export const SCHEMA_VERSION = 1
@@ -22,7 +24,7 @@ const SESSION = 'session'
 type SavedSession = { actors: Record<Role, string>; role: Role; selection?: Selection }
 type Envelope<T> = { schemaVersion: number; data: T }
 type SavedRun = Envelope<Run>
-type SavedReceipt = Envelope<{ fingerprint: string; receipt: RunReceipt }>
+type SavedReceipt<T extends RunReceipt = RunReceipt> = Envelope<{ fingerprint: string; receipt: T }>
 
 function envelope<T>(data: T): Envelope<T> {
   return { schemaVersion: SCHEMA_VERSION, data }
@@ -42,6 +44,7 @@ function readRun(record: SavedRun) {
   const run = check(record)
   validateSavedRun(run)
   validateSavedBaseline(run)
+  validateSavedPlan(run)
   validateSavedDriverDays(run)
   validateSavedMentorDays(run)
   return run
@@ -325,13 +328,34 @@ export class IndexedDbRunStore implements RunStore {
     }))
   }
 
+  saveFollowUp(command: SaveFollowUpCommand, fingerprint: string): Promise<FollowUpReceipt> {
+    return this.#mutateRunWithReceipt(command, fingerprint, run => ({
+      run: saveFollowUp(run, command), dayId: command.payload.dayId,
+    }), (run, receipt) => ({
+      ...receipt,
+      plan: currentPlan(run),
+      event: run.planEvents!.at(-1)!,
+      window: followUpWindow(run, findDay(run, receipt.dayId)!),
+      status: runStatus(run),
+    }))
+  }
+
   #mutateRun(
     command: Pick<SaveDayDraftCommand, 'commandId' | 'runId' | 'actor'>,
     fingerprint: string,
     update: (run: Run) => { run: Run; dayId: string },
   ): Promise<RunReceipt> {
+    return this.#mutateRunWithReceipt(command, fingerprint, update, (_run, receipt) => receipt)
+  }
+
+  #mutateRunWithReceipt<T extends RunReceipt>(
+    command: Pick<SaveDayDraftCommand, 'commandId' | 'runId' | 'actor'>,
+    fingerprint: string,
+    update: (run: Run) => { run: Run; dayId: string },
+    makeReceipt: (run: Run, receipt: RunReceipt) => T,
+  ): Promise<T> {
     return this.#withDatabase([META, RUNS, COMMANDS], 'readwrite', operations => {
-      operations.get<SavedReceipt>(COMMANDS, command.commandId, record => {
+      operations.get<SavedReceipt<T>>(COMMANDS, command.commandId, record => {
         if (record) {
           const previous = check(record)
           if (previous.fingerprint !== fingerprint) throw new AppError('command_conflict')
@@ -344,7 +368,7 @@ export class IndexedDbRunStore implements RunStore {
           operations.get<SavedRun>(RUNS, runId, record => {
             if (!record) throw new AppError('run_missing')
             const { run, dayId } = update(readRun(record))
-            const receipt = { runId, dayId, revision: run.revision }
+            const receipt = makeReceipt(run, { runId, dayId, revision: run.revision })
             operations.put(RUNS, runId, envelope(run))
             operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
             operations.finish(receipt)

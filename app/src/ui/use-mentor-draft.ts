@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react'
 import type { DayView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { BaselineDraftRow } from '../domain/baseline.ts'
+import { followUpInput, previewFollowUp } from '../domain/follow-up.ts'
+import type { FollowUpChoice, FollowUpInput, FollowUpReceipt, SaveFollowUpCommand } from '../domain/follow-up.ts'
 import { applyMentorChanges } from '../domain/mentor-day.ts'
 import type { MentorDayChanges, RelevanceReview, ReviewInput, ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
 import { AppError } from '../domain/run.ts'
@@ -9,7 +11,7 @@ import { useAutosaveDeadline } from './use-autosave-deadline.ts'
 
 export type MentorView = DayView & { mentorDay: NonNullable<DayView['mentorDay']> }
 type Stored = WorkspaceView & { selected: DayView }
-type Problem = { error: unknown; conflict?: { latest?: Stored; readError?: unknown } }
+type Problem = { error: unknown; savedPlan?: FollowUpReceipt; conflict?: { latest?: Stored; readError?: unknown } }
 // Null bevarer en uttrykkelig tømming av råteksten frem til kvittering.
 type Row = Omit<BaselineDraftRow, 'reasonDraft'> & { reasonDraft?: string | null }
 type ReviewAttempt = { id: string; input: ReviewInput; command?: ReviewRelevanceCommand }
@@ -18,6 +20,7 @@ type Draft = {
   rows: Record<string, Row>
   comments: Record<string, string>
   rejectionDrafts: Record<string, string>
+  followUp: FollowUpInput
   writing: boolean
   problem?: Problem
 }
@@ -31,7 +34,7 @@ type Options = {
 }
 
 function draftOf(saved: MentorView): Draft {
-  const { answers, reasonDrafts, comments, rejectionDrafts } = saved.mentorDay
+  const { answers, reasonDrafts, comments, rejectionDrafts, followUp } = saved.mentorDay
   return {
     saved, writing: false,
     rows: Object.fromEntries(answers.map(({ criterionId, value, reason }) => [
@@ -39,6 +42,29 @@ function draftOf(saved: MentorView): Draft {
     ])),
     comments: Object.fromEntries(Object.entries(comments).map(([id, comment]) => [id, comment?.text ?? ''])),
     rejectionDrafts: Object.fromEntries(Object.entries(rejectionDrafts).map(([id, text]) => [id, text ?? ''])),
+    followUp: followUpInput(followUp.decision?.choice),
+  }
+}
+
+function planChanged(draft: Draft) {
+  const initial = followUpInput(draft.saved.mentorDay.followUp.decision?.choice)
+  const { need, type, extraDays } = draft.followUp
+  return need !== initial.need || type !== initial.type || extraDays !== initial.extraDays
+}
+
+function acknowledgePlan(saved: MentorView, receipt: FollowUpReceipt): MentorView {
+  const { event, plan, window, status, revision } = receipt
+  return {
+    ...saved, status, revision, planRevision: plan.revision, plannedLastDay: plan.lastDay,
+    plannedLastDate: saved.days.find(day => day.number === plan.lastDay)?.date,
+    mentorDay: {
+      ...saved.mentorDay,
+      followUp: {
+        decision: { id: event.decisionId, dayId: event.dayId, source: event.source, choice: event.choice },
+        window,
+        history: [...saved.mentorDay.followUp.history, event],
+      },
+    },
   }
 }
 
@@ -69,6 +95,7 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
   const deadline = useAutosaveDeadline()
   const active = useRef<Promise<boolean>>(undefined)
   const draftAttempt = useRef<SaveMentorDayCommand>(undefined)
+  const planAttempt = useRef<SaveFollowUpCommand>(undefined)
   const reviewAttempt = useRef<ReviewAttempt>(undefined)
   const [reviewing, setReviewing] = useState(false)
   const processing = useRef(false)
@@ -91,11 +118,21 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
     update({ [field]: { ...current.current[field], [id]: text } })
   }
 
-  function update(patch: Partial<Pick<Draft, 'rows' | 'comments' | 'rejectionDrafts'>>) {
+  function update(patch: Partial<Pick<Draft, 'rows' | 'comments' | 'rejectionDrafts' | 'followUp'>>) {
     const state = current.current
     if (!state.saved.mentorDay.editable || processing.current || state.problem?.conflict || reviewAttempt.current) return
     publish({ ...state, ...patch })
     if (!state.problem) schedule()
+  }
+
+  function updateFollowUp(followUp: FollowUpInput) {
+    if (planAttempt.current || current.current.problem?.savedPlan) return
+    update({ followUp })
+  }
+
+  function discardFollowUp() {
+    if (planAttempt.current || processing.current) return
+    updateFollowUp(followUpInput(current.current.saved.mentorDay.followUp.decision?.choice))
   }
 
   function matchesActor(stored: WorkspaceView) {
@@ -129,10 +166,11 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       return false
     }
     draftAttempt.current = undefined
+    planAttempt.current = undefined
     reviewAttempt.current = undefined
     const conflict = await readStored()
     const state = current.current
-    if (review && conflict.latest && matchesActor(conflict.latest) && !Object.keys(changesSince(state)).length) {
+    if (review && conflict.latest && matchesActor(conflict.latest) && !Object.keys(changesSince(state)).length && !planChanged(state)) {
       adopt(conflict.latest)
       setNotice('Løpet ble endret. Relevansavgjørelsen ble ikke lagret. Kontroller det lagrede sjåførsvaret og velg på nytt.')
     } else publish({ ...state, writing: false, problem: { error, conflict } })
@@ -162,12 +200,65 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       const next = { ...current.current, saved: { ...saved, mentorDay, revision: receipt.revision }, rows, writing: false }
       publish(next)
       onSaved(next.saved)
-      if (Object.keys(changesSince(next)).length) schedule()
+      if (Object.keys(changesSince(next)).length || planChanged(next)) schedule()
       else deadline.reset()
       return true
     } catch (error) {
       return handleFailure(error)
     }
+  }
+
+  async function writePlan(choice: FollowUpChoice) {
+    deadline.reset()
+    const { saved } = current.current
+    planAttempt.current ??= application.newFollowUpCommand(actor, saved, choice)
+    const command = planAttempt.current
+    publish({ ...current.current, writing: true })
+    let receipt: FollowUpReceipt
+    try {
+      receipt = await application.withOpenStorage(() => application.executeFollowUp(command))
+    } catch (error) {
+      return handleFailure(error)
+    }
+    planAttempt.current = undefined
+    const acknowledged = acknowledgePlan(saved, receipt)
+    publish({ ...current.current, saved: acknowledged, writing: false })
+    onSaved(acknowledged)
+    return readAfterPlan(receipt)
+  }
+
+  async function readAfterPlan(receipt: FollowUpReceipt) {
+    const { latest, readError } = await readStored()
+    const state = current.current
+    const mentorDay = latest?.selected.mentorDay
+    const sameActor = Boolean(latest && matchesActor(latest))
+    const commandFound = mentorDay?.followUp.history.some(event => event.commandId === receipt.event.commandId)
+    if (!latest || (sameActor && !commandFound)) {
+      publish({ ...state, writing: false, problem: { error: readError ?? new AppError('storage_read'), savedPlan: receipt } })
+      return false
+    }
+    if (sameActor && mentorDay && latest.selected.revision === receipt.revision) {
+      const next = { ...state, saved: { ...latest.selected, mentorDay }, writing: false, problem: undefined }
+      publish(next)
+      onAdopt(latest)
+      if (Object.keys(changesSince(next)).length || planChanged(next)) schedule()
+      else deadline.reset()
+      return true
+    }
+    const hadReview = Boolean(reviewAttempt.current)
+    reviewAttempt.current = undefined
+    if (Object.keys(changesSince(state)).length || planChanged(state)) {
+      publish({
+        ...state, writing: false,
+        problem: { error: new AppError('stale'), conflict: { latest }, savedPlan: receipt },
+      })
+      return false
+    }
+    adopt(latest)
+    setNotice(hadReview
+      ? 'Oppfølgingen ble lagret. Kontroller sjåførens svar på nytt før du behandler relevans.'
+      : 'Oppfølgingen ble lagret. Løpet har siden blitt oppdatert.')
+    return sameActor && !hadReview
   }
 
   async function flush(drain = true, duringReview = false) {
@@ -182,11 +273,20 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       const state = current.current
       if (state.problem || (reviewAttempt.current && !duringReview)) return false
       const changes = changesSince(state)
-      if (!draftAttempt.current && !Object.keys(changes).length) {
+      const proposal = previewFollowUp(state.saved.mentorDay.followUp.window, state.followUp)
+      const choice = planAttempt.current?.payload.choice
+        ?? (planChanged(state) && 'choice' in proposal ? proposal.choice : undefined)
+      let writing: Promise<boolean>
+      if (draftAttempt.current) {
+        writing = writeDraft(changes)
+      } else if (choice) {
+        writing = writePlan(choice)
+      } else if (Object.keys(changes).length) {
+        writing = writeDraft(changes)
+      } else {
         deadline.reset()
-        return true
+        return !planChanged(state) || !drain || duringReview
       }
-      const writing = writeDraft(changes)
       active.current = writing
       const result = await writing
       active.current = undefined
@@ -260,7 +360,19 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
   async function retry() {
     const problem = current.current.problem
     if (!problem || problem.conflict || processing.current || active.current) return
-    if (reviewAttempt.current) await finishReview(reviewAttempt.current)
+    if (problem.savedPlan) {
+      const reading = readAfterPlan(problem.savedPlan)
+      active.current = reading
+      setReviewing(true)
+      let refreshed: boolean
+      try {
+        refreshed = await reading
+      } finally {
+        active.current = undefined
+        setReviewing(false)
+      }
+      if (refreshed && reviewAttempt.current) await finishReview(reviewAttempt.current)
+    } else if (reviewAttempt.current) await finishReview(reviewAttempt.current)
     else {
       publish({ ...current.current, problem: undefined })
       await flush()
@@ -307,9 +419,11 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
     publish({
       ...next, rows, comments: { ...next.comments, ...changes.comments },
       rejectionDrafts: { ...next.rejectionDrafts, ...changes.rejectionDrafts },
+      followUp: planChanged(state) ? state.followUp : next.followUp,
     })
     onSaved(next.saved)
-    await flush()
+    if (!planChanged(current.current)
+      || 'choice' in previewFollowUp(selected.mentorDay.followUp.window, current.current.followUp)) await flush()
   }
 
   async function refresh() {
@@ -320,7 +434,13 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
       if (!await flush(true, true)) return false
       const { latest } = await readStored()
       if (!latest) return false
-      adopt(latest)
+      const state = current.current
+      if (planChanged(state)) {
+        if (!matchesActor(latest) || latest.selected.revision !== state.saved.revision) {
+          publish({ ...state, problem: { error: new AppError('stale'), conflict: { latest } } })
+          return false
+        }
+      } else adopt(latest)
       setNotice('')
       return Boolean(latest.selected.mentorDay && matchesActor(latest))
     } finally {
@@ -331,10 +451,14 @@ export function useMentorDraft({ initial, actor, application, report, onSaved, o
 
   const changes = changesSince(draft)
   const conflict = draft.problem?.conflict
+  const planDirty = planChanged(draft)
+  const planPreview = previewFollowUp(draft.saved.mentorDay.followUp.window, draft.followUp)
   return {
     draft, changes, notice, conflict, reviewing, updateRows, updateText, flush, review, retry, refresh, refreshConflict, resolveConflict,
     staleRole: Boolean(conflict?.latest && !matchesActor(conflict.latest)),
     reviewPending: Boolean(reviewAttempt.current),
-    dirty: Boolean(draft.problem || Object.keys(changes).length || draftAttempt.current || reviewAttempt.current),
+    planDirty, planPreview, updateFollowUp, discardFollowUp, planPending: Boolean(planAttempt.current),
+    dirty: Boolean((draft.problem && !draft.problem.savedPlan) || Object.keys(changes).length
+      || draftAttempt.current || reviewAttempt.current || planDirty),
   }
 }

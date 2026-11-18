@@ -3,6 +3,7 @@ import type { SaveDayDraftCommand } from '../domain/day-draft.ts'
 import type { ConfirmBaselineCommand, SaveBaselineDraftCommand } from '../domain/baseline.ts'
 import type { ConfirmDriverDayCommand, SaveDriverDayDraftCommand } from '../domain/driver-day.ts'
 import type { ReviewRelevanceCommand, SaveMentorDayCommand } from '../domain/mentor-day.ts'
+import type { FollowUpReceipt, SaveFollowUpCommand } from '../domain/follow-up.ts'
 
 export type Selection = { runId: string; dayId: string }
 export type Session = { actor: Actor; selection?: Selection }
@@ -18,6 +19,7 @@ export interface RunStore {
   confirmDriverDay(command: ConfirmDriverDayCommand, fingerprint: string): Promise<RunReceipt>
   saveMentorDay(command: SaveMentorDayCommand, fingerprint: string): Promise<RunReceipt>
   reviewRelevance(command: ReviewRelevanceCommand, fingerprint: string): Promise<RunReceipt>
+  saveFollowUp(command: SaveFollowUpCommand, fingerprint: string): Promise<FollowUpReceipt>
   read(selection?: Selection): Promise<WorkspaceState>
   select(runId: string, dayId?: string): Promise<WorkspaceState>
   changeRole(role: Role, selection?: Selection): Promise<WorkspaceState>

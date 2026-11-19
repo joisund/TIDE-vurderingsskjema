@@ -1,4 +1,5 @@
 import { testDriveApiPath } from '../content/test-drive-api.ts'
+import type { TestDriveAssessmentStatus } from '../content/test-drive-api.ts'
 
 const messages: Record<string, string> = {
   invalid_input: 'Kontroller opplysningene i skjemaet og prøv igjen.',
@@ -10,6 +11,12 @@ const messages: Record<string, string> = {
   run_unavailable: 'Testkjøringen er ikke tilgjengelig for denne innloggingen.',
   not_found: 'Testkjøringen er ikke tilgjengelig for denne innloggingen.',
   request_conflict: 'Opprettingen er allerede registrert med andre opplysninger. Se oversikten.',
+  candidate_request_conflict: 'Denne forespørselen er allerede registrert med andre svar.',
+  assessment_incomplete: 'Svar på alle kriteriene før du leverer.',
+  assessment_locked: 'Vurderingen er levert og låst.',
+  assessment_not_open: 'Denne delen er ikke åpen for registrering.',
+  stale_revision: 'En nyere revisjon er lagret på en annen klient.',
+  before_not_submitted: 'Kandidaten må levere førvurderingen først.',
   sign_in_required: 'Økten er utløpt. Logg inn på nytt.',
   server_error: 'Pilotserveren kunne ikke behandle henvendelsen. Prøv igjen.',
 }
@@ -37,7 +44,22 @@ export async function pilotRequest<T>(path: string, body?: object, signal?: Abor
   return value as T
 }
 
+export async function pilotAssessmentWrite<T>(path: string, body: object) {
+  const deadline = AbortSignal.timeout(15_000)
+  try {
+    return await pilotRequest<T>(path, body, deadline)
+  } catch (error) {
+    throw deadline.aborted ? deadline.reason : error
+  }
+}
+
 export function pilotMessage(error: unknown) {
   if (error instanceof PilotRequestError) return error.message
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'Ventetiden utløp. Prøv igjen.'
   return 'Kunne ikke koble til pilotserveren. Prøv igjen.'
+}
+
+export function candidateAssessmentStatus(assessment: TestDriveAssessmentStatus) {
+  if (assessment.submittedAt !== null) return `Levert og låst · Revisjon ${assessment.revision}`
+  return assessment.revision > 0 ? `Lagret utkast · Revisjon ${assessment.revision}` : 'Ingen svar lagret'
 }

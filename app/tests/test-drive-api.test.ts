@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtempSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { pilotDatabaseFile } from '../server/pilot-config.ts'
 import { createTestDriveApi } from '../server/test-drive-api.ts'
 import { PilotError, TestDriveStore } from '../server/test-drive-store.ts'
 import { testDriveApiPath } from '../src/content/test-drive-api.ts'
-import type { CreateTestDrive, TestDriveAdministration, TestDriveWorkspace } from '../src/content/test-drive-api.ts'
+import type { CreateTestDrive, TestDriveAdministration, TestDriveDetail, TestDriveWorkspace } from '../src/content/test-drive-api.ts'
 import { testDriveV1 } from '../src/content/test-drive.v1.ts'
 
 const bergen = 'opplaering-bergen@pilot.test'
@@ -240,6 +240,12 @@ test('avdelingsfullmakt og eksakt tildeling skilles fra faglig lesing, også ett
     assert.equal(reopened.template.version, earlierTemplate.version)
     assert.deepEqual(reopened.template.criteria, earlierTemplate.criteria)
   }
+  const historicalSubmission = `${path}/candidate/before/submit`
+  const historicalCommand = { requestId: randomUUID(), revision: 0 }
+  assert.equal((await pilot.call(historicalSubmission, { cookie: candidate, body: { ...historicalCommand, answers: { 'td-01': 'ok' } } })).status, 400)
+  const submitted = await pilot.call(historicalSubmission, { cookie: candidate, body: { ...historicalCommand, answers: { 'td-historisk': 'ok' } } })
+  assert.equal(submitted.status, 200)
+  assert.equal((await submitted.json()).phase, 'driving')
   const invitations = pilot.store.database.prepare("SELECT value FROM pilot_mailbox WHERE email = ? AND kind = 'invitation'").all(candidateOne)
   assert.equal(invitations.length, 1)
   assert.equal(invitations[0]?.value, `${pilot.origin}/testkjoring/?lop=${run.id}`)
@@ -273,6 +279,9 @@ test('aktiv økt mister kandidattilgang ved utløp og tilbakekall, mens tildelt 
     assert.equal(workspace.status, 200, 'Innloggingsøkten består ved utløp og tilbakekall')
     assert.deepEqual((await workspace.json()).assignments, [])
     assert.equal((await pilot.call(`/runs/${run.id}`, { cookie })).status, 404)
+    assert.equal((await pilot.call(`/runs/${run.id}/candidate/before/save`, {
+      cookie, body: { requestId: randomUUID(), revision: 0, answers: { 'td-01': 'ok' } },
+    })).status, 404)
     assert.equal((await pilot.call(`/runs/${run.id}`, { cookie: instructor })).status, 200)
     assert.throws(() => pilot.store.withAssignment(run.candidate.id, run.id, pilot.now, () => {
       assert.fail('Skriveoperasjonen skal avvises før lagring')
@@ -282,6 +291,130 @@ test('aktiv økt mister kandidattilgang ved utløp og tilbakekall, mens tildelt 
   assert.deepEqual(rows.map(row => row.phase), ['before', 'before'])
   const history = await (await pilot.call('/workspace', { cookie: admin })).json() as TestDriveWorkspace
   assert.deepEqual(history.administration.map(row => row.access).sort(), ['expired', 'revoked'])
+})
+
+test('kandidaten leverer egne før- og etterrevisjoner med tildelt fasekvittering', async t => {
+  const pilot = await open(t)
+  const admin = await pilot.signIn(bergen)
+  const firstClient = await pilot.signIn(candidateOne)
+  const secondClient = await pilot.signIn(candidateOne)
+  const otherCandidate = await pilot.signIn(candidateTwo)
+  const instructor = await pilot.signIn(instructorOne)
+  const otherInstructor = await pilot.signIn(instructorTwo)
+  const run = await pilot.create(admin)
+  const path = `/runs/${run.id}`
+  const before = `${path}/candidate/before`
+  const after = `${path}/candidate/after`
+  const complete = `${path}/complete-driving`
+  const command = (revision: number, answers: Record<string, string>) => ({ requestId: randomUUID(), revision, answers })
+  const partial = command(0, { 'td-01': 'improve' })
+  const empty = { revision: 0, submittedAt: null, answers: {} }
+
+  async function detail(cookie: string) {
+    const response = await pilot.call(path, { cookie })
+    assert.equal(response.status, 200)
+    return await response.json() as TestDriveDetail
+  }
+
+  async function expectFailure(path: string, cookie: string, body: object, status: number, error: string) {
+    const response = await pilot.call(path, { cookie, body })
+    assert.equal(response.status, status)
+    assert.deepEqual(await response.json(), { error })
+  }
+
+  for (const cookie of [admin, otherCandidate, instructor, otherInstructor]) {
+    await expectFailure(`${before}/save`, cookie, partial, 404, 'run_unavailable')
+  }
+  for (const cookie of [admin, firstClient, otherCandidate, otherInstructor]) {
+    await expectFailure(complete, cookie, {}, 404, 'run_unavailable')
+  }
+  await expectFailure(complete, instructor, {}, 409, 'before_not_submitted')
+  await expectFailure(`${after}/save`, firstClient, partial, 409, 'assessment_not_open')
+  await expectFailure(`${before}/submit`, firstClient, partial, 400, 'assessment_incomplete')
+  await expectFailure(`${before}/save`, firstClient, command(0, { 'td-01': 'fail' }), 400, 'invalid_input')
+  await expectFailure(`${before}/save`, firstClient, command(0, { unrelated: 'ok' }), 400, 'invalid_input')
+  assert.deepEqual((await detail(firstClient)).candidateAssessments, { before: empty, after: empty })
+
+  const firstSave = await pilot.call(`${before}/save`, { cookie: firstClient, body: partial })
+  assert.equal(firstSave.status, 200)
+  const saved = { revision: 1, submittedAt: null, answers: partial.answers }
+  assert.deepEqual((await firstSave.json()).candidateAssessments, { before: saved, after: empty })
+  await pilot.restart()
+  assert.deepEqual((await detail(secondClient)).candidateAssessments, { before: saved, after: empty })
+  assert.deepEqual((await detail(instructor)).candidateAssessments, {
+    before: { revision: 1, submittedAt: null }, after: { revision: 0, submittedAt: null },
+  })
+  await expectFailure(`${before}/save`, secondClient, command(0, { 'td-01': 'ok' }), 409, 'stale_revision')
+
+  const criteria = (await detail(secondClient)).template.criteria
+  const source = readFileSync(new URL('../../_bmad-output/implementation-artifacts/epic-4-testkjoring-teknisk-grunnlag.md', import.meta.url), 'utf8')
+  const sourceCriteria = [...source.matchAll(/^\| \d+ \| (.+?) \|\r?$/gm)].map(match => match[1])
+  assert.equal(sourceCriteria.length, 22)
+  assert.deepEqual(criteria.map(criterion => criterion.label), sourceCriteria)
+  assert.deepEqual((await detail(secondClient)).template.candidateChoices, [
+    { id: 'ok', label: 'OK' }, { id: 'improve', label: 'Kan bli bedre' },
+  ])
+
+  const beforeAnswers = Object.fromEntries(criteria.map(({ id }) => [id, 'ok']))
+  const submission = command(1, beforeAnswers)
+  pilot.store.database.exec(`
+    CREATE TEMP TRIGGER reject_driving_transition BEFORE UPDATE OF phase ON test_drives
+    WHEN OLD.phase = 'before' AND NEW.phase = 'driving'
+    BEGIN SELECT RAISE(ABORT, 'simulert fasefeil'); END;
+  `)
+  try {
+    await expectFailure(`${before}/submit`, secondClient, submission, 500, 'server_error')
+    const rolledBack = await detail(firstClient)
+    assert.equal(rolledBack.phase, 'before')
+    assert.deepEqual(rolledBack.candidateAssessments, { before: saved, after: empty })
+    assert.equal(pilot.store.database.prepare('SELECT 1 FROM test_drive_candidate_requests WHERE drive_id = ? AND request_id = ?')
+      .get(run.id, submission.requestId), undefined)
+  } finally {
+    pilot.store.database.exec('DROP TRIGGER reject_driving_transition')
+  }
+  const submitted = await pilot.call(`${before}/submit`, { cookie: secondClient, body: submission })
+  assert.equal(submitted.status, 200)
+  const submittedAt = new Date(pilot.now).toISOString()
+  const lockedBefore = { revision: 2, submittedAt, answers: beforeAnswers }
+  assert.equal((await detail(firstClient)).phase, 'driving')
+  assert.deepEqual((await detail(firstClient)).candidateAssessments, { before: lockedBefore, after: empty })
+  await expectFailure(`${after}/submit`, firstClient, command(0, beforeAnswers), 409, 'assessment_not_open')
+  await expectFailure(`${before}/save`, firstClient, command(2, partial.answers), 409, 'assessment_locked')
+  await expectFailure(`${before}/submit`, firstClient, command(2, beforeAnswers), 409, 'assessment_locked')
+
+  const opened = await pilot.call(complete, { cookie: instructor, body: {} })
+  assert.equal(opened.status, 200)
+  const instructorView = await opened.json()
+  assert.equal(instructorView.phase, 'after')
+  assert.deepEqual(instructorView.candidateAssessments, {
+    before: { revision: 2, submittedAt }, after: { revision: 0, submittedAt: null },
+  })
+  assert.deepEqual(await (await pilot.call(complete, { cookie: instructor, body: {} })).json(), instructorView)
+  const reordered = Object.fromEntries(Object.entries(beforeAnswers).reverse())
+  assert.equal((await pilot.call(`${before}/submit`, { cookie: firstClient, body: { ...submission, answers: reordered } })).status, 200)
+  await expectFailure(`${before}/submit`, firstClient, { ...submission, answers: partial.answers }, 409, 'candidate_request_conflict')
+
+  pilot.advance(1000)
+  const afterAnswers = { ...beforeAnswers, 'td-01': 'improve' }
+  const afterSave = command(0, { 'td-01': 'improve' })
+  const competingSave = command(0, { 'td-01': 'ok' })
+  const saves = await Promise.all([afterSave, competingSave].map(body => pilot.call(`${after}/save`, { cookie: firstClient, body })))
+  assert.deepEqual(saves.map(response => response.status).sort(), [200, 409])
+  const finish = command(1, afterAnswers)
+  assert.equal((await pilot.call(`${after}/submit`, { cookie: firstClient, body: finish })).status, 200)
+  assert.equal((await pilot.call(`${after}/submit`, { cookie: secondClient, body: finish })).status, 200)
+  await expectFailure(`${after}/save`, firstClient, command(2, beforeAnswers), 409, 'assessment_locked')
+  const final = await detail(secondClient)
+  assert.equal(final.phase, 'after')
+  assert.deepEqual(final.candidateAssessments, {
+    before: lockedBefore, after: { revision: 2, submittedAt: new Date(pilot.now).toISOString(), answers: afterAnswers },
+  })
+  assert.deepEqual((await detail(instructor)).candidateAssessments, {
+    before: { revision: 2, submittedAt }, after: { revision: 2, submittedAt: new Date(pilot.now).toISOString() },
+  })
+  const originalSaveRetry = await pilot.call(`${before}/save`, { cookie: secondClient, body: partial })
+  assert.equal(originalSaveRetry.status, 200)
+  assert.deepEqual(await originalSaveRetry.json(), final)
 })
 
 test('pilotdatabasen avvises i public og dist, også via et mappealias', () => {

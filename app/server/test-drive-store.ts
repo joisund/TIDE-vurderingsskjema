@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { types } from 'node:util'
 import { testDrivePath } from '../src/content/test-drive-api.ts'
 import type {
-  CreateTestDrive, TestDriveAdministration, TestDriveAssignment, TestDriveDetail,
+  CreateTestDrive, TestDriveAdministration, TestDriveAssignment, TestDriveCandidateAction,
+  TestDriveCandidateAssessment, TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail,
   TestDrivePerson, TestDrivePhase, TestDriveRole, TestDriveWorkspace,
 } from '../src/content/test-drive-api.ts'
 import { testDriveV1 } from '../src/content/test-drive.v1.ts'
@@ -58,6 +59,20 @@ const schema = `
   CREATE INDEX IF NOT EXISTS test_drives_by_candidate ON test_drives (candidate_id, expires_at);
   CREATE INDEX IF NOT EXISTS test_drives_by_instructor ON test_drives (instructor_id, expires_at);
   CREATE INDEX IF NOT EXISTS test_drives_by_department ON test_drives (department_id, created_at);
+  CREATE TABLE IF NOT EXISTS test_drive_candidate_assessments (
+    drive_id TEXT NOT NULL REFERENCES test_drives(id),
+    part TEXT NOT NULL CHECK (part IN ('before', 'after')),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    answers TEXT NOT NULL CHECK (json_type(answers) = 'object'),
+    submitted_at INTEGER,
+    PRIMARY KEY (drive_id, part)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS test_drive_candidate_requests (
+    drive_id TEXT NOT NULL, part TEXT NOT NULL,
+    request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+    PRIMARY KEY (drive_id, part, request_id),
+    FOREIGN KEY (drive_id, part) REFERENCES test_drive_candidate_assessments(drive_id, part)
+  ) STRICT;
   CREATE TABLE IF NOT EXISTS pilot_login_challenges (
     id TEXT PRIMARY KEY, email TEXT NOT NULL, digest TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -244,11 +259,83 @@ export class TestDriveStore {
 
   detail(row: AuthorizedTestDrive): TestDriveDetail {
     const { version, source, headerFields, criteria, candidateChoices } = this.template(row)
-    return {
+    const common = {
       ...assignment(row),
       header: JSON.parse(row.header),
       template: { version, source, headerFields, criteria, candidateChoices },
     }
+    const before = this.candidateAssessment(row.id, 'before')
+    const after = this.candidateAssessment(row.id, 'after')
+    if (row.role === 'candidate') {
+      return { ...common, role: 'candidate', candidateAssessments: { before, after } }
+    }
+    return { ...common, role: 'instructor', candidateAssessments: {
+      before: { revision: before.revision, submittedAt: before.submittedAt },
+      after: { revision: after.revision, submittedAt: after.submittedAt },
+    } }
+  }
+
+  candidateAssessment(driveId: string, part: TestDriveCandidatePart): TestDriveCandidateAssessment {
+    const saved = this.database.prepare(`
+      SELECT revision, answers, submitted_at FROM test_drive_candidate_assessments WHERE drive_id = ? AND part = ?
+    `).get(driveId, part) as { revision: number; answers: string; submitted_at: number | null } | undefined
+    if (!saved) return { revision: 0, answers: {}, submittedAt: null }
+    return {
+      revision: saved.revision,
+      answers: JSON.parse(saved.answers),
+      submittedAt: saved.submitted_at === null ? null : new Date(saved.submitted_at).toISOString(),
+    }
+  }
+
+  writeCandidateAssessment(run: AuthorizedTestDrive, part: TestDriveCandidatePart, action: TestDriveCandidateAction,
+    input: Omit<TestDriveCandidateWrite, 'answers'> & { answers: Record<string, unknown> }, now: number) {
+    if (run.role !== 'candidate') throw new PilotError(404, 'run_unavailable')
+    const { criteria, candidateChoices } = this.template(run)
+    const criterionIds = new Set<string>(criteria.map(criterion => criterion.id))
+    const choiceIds = new Set<unknown>(candidateChoices.map(choice => choice.id))
+    const answerIds = Object.keys(input.answers).sort()
+    if (answerIds.some(id => !criterionIds.has(id) || !choiceIds.has(input.answers[id]))) {
+      throw new PilotError(400, 'invalid_input')
+    }
+    const answers = JSON.stringify(Object.fromEntries(answerIds.map(id => [id, input.answers[id]])))
+    const requestHash = digest(JSON.stringify([action, input.revision, answers]))
+    const receipt = this.database.prepare(`
+      SELECT request_hash FROM test_drive_candidate_requests WHERE drive_id = ? AND part = ? AND request_id = ?
+    `).get(run.id, part, input.requestId)
+    if (receipt) {
+      if (receipt.request_hash !== requestHash) throw new PilotError(409, 'candidate_request_conflict')
+      return this.detail(run)
+    }
+
+    const saved = this.candidateAssessment(run.id, part)
+    if (saved.submittedAt !== null) throw new PilotError(409, 'assessment_locked')
+    if (run.phase !== part) throw new PilotError(409, 'assessment_not_open')
+    if (input.revision !== saved.revision) throw new PilotError(409, 'stale_revision')
+    const submitted = action === 'submit'
+    if (submitted && answerIds.length !== criteria.length) throw new PilotError(400, 'assessment_incomplete')
+
+    this.database.prepare(`
+      INSERT INTO test_drive_candidate_assessments (drive_id, part, revision, answers, submitted_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (drive_id, part) DO UPDATE
+      SET revision = excluded.revision, answers = excluded.answers, submitted_at = excluded.submitted_at
+    `).run(run.id, part, saved.revision + 1, answers, submitted ? now : null)
+    this.database.prepare(`
+      INSERT INTO test_drive_candidate_requests (drive_id, part, request_id, request_hash) VALUES (?, ?, ?, ?)
+    `).run(run.id, part, input.requestId, requestHash)
+    if (submitted && part === 'before') {
+      this.database.prepare("UPDATE test_drives SET phase = 'driving' WHERE id = ?").run(run.id)
+      return this.detail({ ...run, phase: 'driving' })
+    }
+    return this.detail(run)
+  }
+
+  completeDriving(run: AuthorizedTestDrive) {
+    if (run.role !== 'instructor') throw new PilotError(404, 'run_unavailable')
+    if (run.phase === 'after' || run.phase === 'closed') return this.detail(run)
+    if (run.phase !== 'driving') throw new PilotError(409, 'before_not_submitted')
+    this.database.prepare("UPDATE test_drives SET phase = 'after' WHERE id = ?").run(run.id)
+    return this.detail({ ...run, phase: 'after' })
   }
 
   workspace(account: TestDrivePerson, now: number, origin: string): TestDriveWorkspace {

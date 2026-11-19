@@ -43,17 +43,29 @@ function validateHeader(value: unknown): TestDriveHeader {
   return result
 }
 
+function requestIdentifier(value: unknown) {
+  const id = text(value, 36).toLowerCase()
+  if (!uuid.test(id)) invalid()
+  return id
+}
+
 function createInput(body: Record<string, unknown>): CreateTestDrive {
-  const requestId = text(body.requestId, 36).toLowerCase()
+  const requestId = requestIdentifier(body.requestId)
   const departmentId = text(body.departmentId, 100)
   const candidateName = text(body.candidateName, 120)
   const candidateEmail = emailAddress(body.candidateEmail)
   const instructorId = text(body.instructorId, 100)
   const expiresAt = text(body.expiresAt, 35)
-  if (!uuid.test(requestId) || !departmentId || !candidateName || !instructorId) invalid()
+  if (!departmentId || !candidateName || !instructorId) invalid()
   const expiry = new Date(expiresAt)
   if (!Number.isFinite(expiry.getTime()) || expiry.toISOString() !== expiresAt) throw new PilotError(400, 'invalid_expiry')
   return { requestId, departmentId, candidateName, candidateEmail, instructorId, expiresAt, header: validateHeader(body.header ?? {}) }
+}
+
+function candidateInput(body: Record<string, unknown>) {
+  const { revision } = body
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) invalid()
+  return { requestId: requestIdentifier(body.requestId), revision, answers: object(body.answers) }
 }
 
 async function readJson(request: IncomingMessage) {
@@ -141,13 +153,22 @@ export function createTestDriveApi(store: TestDriveStore, origin: URL, clock = D
         return json(response, result.created ? 201 : 200, result.run)
       }
 
-      const route = /^\/runs\/([^/]+)(\/revoke)?$/.exec(path)
-      const id = route?.[1]
+      const [, id, command] = /^\/runs\/([^/]+)(?:\/(.*))?$/.exec(path) ?? []
       if (id && uuid.test(id)) {
-        if (method === 'GET' && !route?.[2]) {
+        if (method === 'GET' && command === undefined) {
           return json(response, 200, store.withAssignment(account.id, id, now, run => store.detail(run)))
         }
-        if (method === 'POST' && route?.[2]) return json(response, 200, store.revokeCandidate(account, id, now, origin.origin))
+        if (method === 'POST') {
+          if (command === 'revoke') return json(response, 200, store.revokeCandidate(account, id, now, origin.origin))
+          if (command === 'complete-driving') {
+            return json(response, 200, store.withAssignment(account.id, id, now, run => store.completeDriving(run), 'instructor'))
+          }
+          const [, part, action] = /^candidate\/(before|after)\/(save|submit)$/.exec(command ?? '') ?? []
+          if ((part === 'before' || part === 'after') && (action === 'save' || action === 'submit')) {
+            return json(response, 200, store.withAssignment(account.id, id, now,
+              run => store.writeCandidateAssessment(run, part, action, candidateInput(body), now), 'candidate'))
+          }
+        }
       }
       throw new PilotError(404, 'not_found')
     } catch (error) {

@@ -4,14 +4,16 @@ import { flushSync } from 'react-dom'
 import logo from '../assets/tide-logo-rgb.png'
 import { testDrivePath } from '../content/test-drive-api.ts'
 import type { TestDriveAdministration, TestDriveDetail, TestDrivePhase, TestDriveWorkspace } from '../content/test-drive-api.ts'
+import { CandidateTestDriveAssessment } from './CandidateTestDriveAssessment.tsx'
 import { CreateTestDriveForm } from './CreateTestDriveForm.tsx'
-import { PilotRequestError, pilotMessage, pilotRequest } from './test-drive-client.ts'
+import { PilotRequestError, candidateAssessmentStatus, pilotAssessmentWrite, pilotMessage, pilotRequest } from './test-drive-client.ts'
 import './app.css'
 import './test-drive.css'
 
 const phaseName: Record<TestDrivePhase, string> = {
   before: 'Førvurdering', driving: 'Kjøring', after: 'Ettervurdering', closed: 'Avsluttet',
 }
+const phaseOrder: Record<TestDrivePhase, number> = { before: 0, driving: 1, after: 2, closed: 3 }
 const accessName = { active: 'Aktiv', expired: 'Utløpt', revoked: 'Trukket tilbake' }
 const dateTime = new Intl.DateTimeFormat('nb-NO', { dateStyle: 'medium', timeStyle: 'short' })
 const unavailableRun = 'Testkjøringen er ikke tilgjengelig for denne innloggingen.'
@@ -19,6 +21,7 @@ const unavailableRun = 'Testkjøringen er ikke tilgjengelig for denne innlogging
 function usePilotRefresh(load: (signal: AbortSignal) => void, shield: () => void) {
   const refresh = useEffectEvent(load)
   const hideStaleView = useEffectEvent(shield)
+  const recheckRef = useRef<() => void>(undefined)
   useEffect(() => {
     let controller: AbortController | undefined
     function recheck() {
@@ -37,12 +40,14 @@ function usePilotRefresh(load: (signal: AbortSignal) => void, shield: () => void
       beforeCache(event)
       recheck()
     }
+    recheckRef.current = recheck
     recheck()
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', recheck)
     window.addEventListener('pagehide', beforeCache)
     window.addEventListener('pageshow', restore)
     return () => {
+      recheckRef.current = undefined
       controller?.abort()
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', recheck)
@@ -50,6 +55,7 @@ function usePilotRefresh(load: (signal: AbortSignal) => void, shield: () => void
       window.removeEventListener('pageshow', restore)
     }
   }, [])
+  return recheckRef
 }
 
 function Deadline({ value }: { value: string }) {
@@ -230,19 +236,104 @@ function Workspace({ workspace, onSessionEnd, onRunChange }: {
   )
 }
 
+function CandidateProgress({ detail, onUpdated, onRefresh, onAccessDenied }: {
+  detail: Extract<TestDriveDetail, { role: 'instructor' }>
+  onUpdated: (detail: TestDriveDetail) => void
+  onRefresh: () => void
+  onAccessDenied: (error: unknown) => boolean
+}) {
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
+  const heading = useRef<HTMLHeadingElement>(null)
+
+  async function complete() {
+    setBusy(true)
+    setProblem('')
+    try {
+      const updated = await pilotAssessmentWrite<TestDriveDetail>(`/runs/${detail.id}/complete-driving`, {})
+      onUpdated(updated)
+      heading.current?.focus()
+    } catch (error) {
+      if (onAccessDenied(error)) return
+      setProblem(`Kunne ikke bekrefte gjennomført kjøring. ${pilotMessage(error)}`)
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <section className="test-drive-assessment" aria-labelledby="candidate-progress">
+      <h3 id="candidate-progress" ref={heading} tabIndex={-1}>Kandidatens vurderinger</h3>
+      <dl className="details">
+        <div><dt>Førvurdering</dt><dd>{candidateAssessmentStatus(detail.candidateAssessments.before)}</dd></div>
+        <div><dt>Ettervurdering</dt><dd>{detail.phase === 'before' || detail.phase === 'driving'
+          ? 'Stengt for registrering' : candidateAssessmentStatus(detail.candidateAssessments.after)}</dd></div>
+      </dl>
+      {detail.phase === 'before' && (
+        <>
+          <p>Kandidaten må levere førvurderingen før kjøringen starter.</p>
+          <button type="button" className="button secondary" onClick={onRefresh}>Oppdater status</button>
+        </>
+      )}
+      {detail.phase === 'driving' && (
+        <div className="actions">
+          <button type="button" className="button primary" disabled={busy} onClick={() => void complete()}>
+            Bekreft gjennomført kjøring
+          </button>
+        </div>
+      )}
+      {detail.phase === 'after' && <p role="status">Kjøringen er bekreftet gjennomført. Ettervurderingen er åpnet.</p>}
+      {problem && detail.phase !== 'after' && detail.phase !== 'closed' && <p role="alert" className="error-panel">{problem}</p>}
+    </section>
+  )
+}
+
+function latestDetail(previous: TestDriveDetail | undefined, incoming: TestDriveDetail) {
+  if (previous && (phaseOrder[previous.phase] > phaseOrder[incoming.phase] ||
+    previous.candidateAssessments.before.revision > incoming.candidateAssessments.before.revision ||
+    previous.candidateAssessments.after.revision > incoming.candidateAssessments.after.revision)) return previous
+  return incoming
+}
+
 function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void }) {
-  const [state, setState] = useState<{ detail?: TestDriveDetail; problem?: string }>({})
-  usePilotRefresh(signal => {
+  const [state, setState] = useState<{ detail?: TestDriveDetail; problem?: string; refreshProblem?: string }>({})
+  const writeCount = useRef(0)
+  const accessVersion = useRef(0)
+
+  function handleAccessDenied(error: unknown) {
+    if (!(error instanceof PilotRequestError) || (error.status !== 401 && error.status !== 404)) return false
+    accessVersion.current++
+    setState({ problem: pilotMessage(error) })
+    if (error.status === 401) onSessionEnd()
+    return true
+  }
+
+  const recheck = usePilotRefresh(signal => {
+    const checkingAt = writeCount.current
+    const accessAt = accessVersion.current
     void pilotRequest<TestDriveDetail>(`/runs/${encodeURIComponent(id)}`, undefined, signal).then(detail => {
-      if (!signal.aborted) setState({ detail })
+      if (signal.aborted || accessAt !== accessVersion.current) return
+      if (detail.role === 'candidate' && Date.parse(detail.expiresAt) <= Date.now()) {
+        setState({ problem: unavailableRun })
+      } else {
+        setState(current => ({ detail: latestDetail(current.detail, detail) }))
+      }
     }, error => {
-      if (signal.aborted) return
-      if (error instanceof PilotRequestError && error.status === 401) return onSessionEnd()
-      setState({ problem: pilotMessage(error) })
+      if (signal.aborted || accessAt !== accessVersion.current || handleAccessDenied(error)) return
+      if (checkingAt === writeCount.current) {
+        setState(current => current.detail
+          ? { ...current, refreshProblem: pilotMessage(error) }
+          : { problem: pilotMessage(error) })
+      }
     })
   }, () => setState({}))
 
-  const { detail, problem } = state
+  function refreshDetail() { recheck.current?.() }
+
+  function updateDetail(detail: TestDriveDetail) {
+    writeCount.current++
+    setState(current => current.detail ? { detail: latestDetail(current.detail, detail) } : current)
+  }
+
+  const { detail, problem, refreshProblem } = state
   const candidateExpiry = detail?.role === 'candidate' ? Date.parse(detail.expiresAt) : undefined
   useEffect(() => {
     if (candidateExpiry === undefined) return
@@ -261,6 +352,7 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
       <div className="actions"><a className="button secondary test-drive-link" href={testDrivePath}>Til testkjøringsoversikten</a></div>
       {problem ? <p className="error-panel" role="alert">{problem}</p> : detail ? (
         <>
+          {refreshProblem && <p className="error-panel" role="alert">Kunne ikke oppdatere testkjøringen. {refreshProblem}</p>}
           <h2>{detail.candidateName}</h2>
           <dl className="details">
             <div><dt>Avdeling</dt><dd>{detail.department.name}</dd></div>
@@ -279,6 +371,14 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
             </ol>
             <p className="hint">{detail.template.source.collection} {detail.template.source.year}</p>
           </details>
+          {detail.role === 'candidate' ? (
+            <>
+              <CandidateTestDriveAssessment detail={detail} part="before" onUpdated={updateDetail} onRefresh={refreshDetail}
+                onAccessDenied={handleAccessDenied} />
+              <CandidateTestDriveAssessment detail={detail} part="after" onUpdated={updateDetail} onRefresh={refreshDetail}
+                onAccessDenied={handleAccessDenied} />
+            </>
+          ) : <CandidateProgress detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail} onAccessDenied={handleAccessDenied} />}
         </>
       ) : <p role="status">Åpner testkjøringen …</p>}
     </section>
@@ -301,7 +401,7 @@ export function TestDriveApp() {
     }, error => {
       if (signal.aborted) return
       if (error instanceof PilotRequestError && error.status === 401) setView({ kind: 'sign-in' })
-      else setView({ kind: 'unavailable' })
+      else setView(current => runId && current.kind === 'workspace' ? current : { kind: 'unavailable' })
     })
   }, () => {
     if (!runId) setView(current => current.kind === 'workspace' ? { kind: 'loading' } : current)

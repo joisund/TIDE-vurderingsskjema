@@ -31,7 +31,7 @@ const messages: Record<ErrorCode, string> = {
   technical_instructor: 'Skriv navnet på instruktøren som bekrefter. Det må samsvare med instruktørnavnet i dokumentet.',
   line_document_missing: 'Linjeoversikten finnes ikke for valgt sjåfør. Åpne dokumentoversikten på nytt.',
   line_version: 'Denne versjonen av linjemalen, dokumentreglene eller PDF-oppsettet støttes ikke.',
-  line_template: 'Linjeoversikten samsvarer ikke med de 26 linjene i malen.',
+  line_template: 'Linjeoversikten avviker fra den tilhørende malen, eller den valgte linjen er utilgjengelig for registrering.',
   line_history: 'Den bekreftede linjehistorikken er ufullstendig eller samsvarer med feil versjon.',
   line_source_missing: 'Den valgte bekreftede historikkversjonen finnes ikke.',
   line_incomplete: 'De valgte registreringene mangler gyldige opplysninger. Kontroller utvalget på nytt.',

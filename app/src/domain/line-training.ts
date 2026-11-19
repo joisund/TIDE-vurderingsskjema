@@ -1,5 +1,6 @@
 import { lineTemplateV1 } from '../content/line-training.v1.ts'
-import type { LineTemplate } from '../content/line-training.v1.ts'
+import type { LineTemplate, LineTemplateRow } from '../content/line-training.v1.ts'
+import { extraLines, lineCatalog, lineTemplateV2 } from '../content/line-training.v2.ts'
 import { AppError, hasText, isCalendarDate, isConfirmationTime, isId, isRole, validateDriverFields } from './run.ts'
 import type { Actor, DriverFields, DriverReference, ErrorCode } from './run.ts'
 
@@ -25,6 +26,7 @@ type LineContent = LineSelection & {
 }
 export type LineTrainingSnapshot = LineContent & {
   sourceVersion: number; confirmedRevision: number; confirmedThrough: string; entries: ConfirmedLineEntry[]
+  previouslyRecordedLines?: LineTemplateRow[]
 }
 export type LineTraining = LineContent & { revision: number; entries: LineEntry[]; snapshots: LineTrainingSnapshot[] }
 export type LineSummary = LineSelection & LineHeader & { driverRef: string; draftCount: number; confirmedCount: number }
@@ -109,7 +111,7 @@ export function createLineTraining(command: CreateLineTraining, driver: DriverRe
   return {
     documentType: lineDocumentType, documentId: command.documentId, driverRef: driver.id, revision: 0,
     header: { driverName: driver.name, employeeNumber: driver.employeeNumber },
-    template: structuredClone(lineTemplateV1), ruleVersion, pdfLayoutVersion: linePdfLayoutVersion, entries: [], snapshots: [],
+    template: structuredClone(lineTemplateV2), ruleVersion, pdfLayoutVersion: linePdfLayoutVersion, entries: [], snapshots: [],
   }
 }
 
@@ -117,19 +119,27 @@ function checkLineContent(content: LineContent) {
   if (!content || content.documentType !== lineDocumentType || !isId(content.documentId) || !isId(content.driverRef)
     || !stringFields(content.header, headerFields)) throw new AppError('storage_read')
   const { template } = content
-  if (template?.id !== lineTemplateV1.id || template.version !== lineTemplateV1.version
+  const expected = [lineTemplateV1, lineTemplateV2].find(candidate => candidate.version === template?.version)
+  if (!expected || template.id !== expected.id
     || content.ruleVersion !== ruleVersion || content.pdfLayoutVersion !== linePdfLayoutVersion) throw new AppError('line_version')
-  const expected = lineTemplateV1.lines
-  if (!Array.isArray(template.lines) || template.lines.length !== expected.length
-    || !expected.every(({ id, label, note }, index) => {
-      const line = template.lines[index]
-      return line?.id === id && line.label === label && line.note === note
-    })) throw new AppError('line_template')
+  if (!sameLineRows(template.lines, expected.lines)) throw new AppError('line_template')
 }
 
-export function lineEntryErrors(fields: LineEntryFields, template: LineTemplate, now: string) {
+function sameLineRows(rows: unknown, expected: LineTemplateRow[]) {
+  return Array.isArray(rows) && rows.length === expected.length && expected.every(({ id, label, note }, index) => {
+    const row = rows[index]
+    return row?.id === id && row.label === label && row.note === note
+  })
+}
+
+export function previouslyRecordedLines(entries: ReadonlyArray<Pick<LineEntryFields, 'lineId'>>) {
+  const recordedIds = new Set(entries.map(entry => entry.lineId))
+  return extraLines.filter(line => recordedIds.has(line.id))
+}
+
+export function lineEntryErrors(fields: LineEntryFields, lines: LineTemplateRow[], now: string) {
   return {
-    lineId: template.lines.some(line => line.id === fields.lineId) ? undefined : 'Velg en linje fra oversikten.',
+    lineId: lines.some(line => line.id === fields.lineId) ? undefined : 'Velg en linje fra oversikten.',
     drivenDate: isCalendarDate(fields.drivenDate) && fields.drivenDate <= osloDate.format(new Date(now))
       ? undefined : 'Skriv inn faktisk kjøredato som ÅÅÅÅ-MM-DD. Datoen kan ikke være i fremtiden.',
   }
@@ -140,22 +150,22 @@ function validAuthor(entry: LineEntry, driverRef: string) {
   return isId(author?.id) && hasText(author.name) && author.role === 'sjåfør' && author.driverRef === driverRef
 }
 
-function validEntry(entry: LineEntry, document: LineContent) {
+function validEntry(entry: LineEntry, driverRef: string, lines: LineTemplateRow[]) {
   return isId(entry?.entryId) && typeof entry.lineId === 'string'
-    && (!entry.lineId || document.template.lines.some(line => line.id === entry.lineId))
-    && typeof entry.drivenDate === 'string' && validAuthor(entry, document.driverRef)
+    && (!entry.lineId || lines.some(line => line.id === entry.lineId))
+    && typeof entry.drivenDate === 'string' && validAuthor(entry, driverRef)
     && isConfirmationTime(entry.recordedAt) && isConfirmationTime(entry.editedAt)
     && !isEarlier(entry.editedAt, entry.recordedAt)
 }
 
-function validConfirmedEntry(entry: ConfirmedLineEntry, source: LineTrainingSnapshot) {
+function validConfirmedEntry(entry: ConfirmedLineEntry, source: LineTrainingSnapshot, lines: LineTemplateRow[]) {
   const confirmation = entry?.confirmation
-  return validEntry(entry, source) && entry.status === 'confirmed' && isId(confirmation?.actor?.id)
+  return validEntry(entry, source.driverRef, lines) && entry.status === 'confirmed' && isId(confirmation?.actor?.id)
     && confirmation.actor.role === 'instruktør' && hasText(confirmation.actor.name)
     && isConfirmationTime(confirmation.confirmedAt) && Number.isSafeInteger(confirmation.sourceVersion)
     && confirmation.sourceVersion > 0 && confirmation.sourceVersion <= source.sourceVersion
     && !isEarlier(confirmation.confirmedAt, entry.editedAt)
-    && !Object.values(lineEntryErrors(entry, source.template, confirmation.confirmedAt)).some(Boolean)
+    && !Object.values(lineEntryErrors(entry, lines, confirmation.confirmedAt)).some(Boolean)
 }
 
 function sameHeader(a: LineHeader, b: LineHeader) {
@@ -177,18 +187,22 @@ export function validateSavedLine(document: LineTraining) {
   checkLineContent(document)
   if (!Number.isSafeInteger(document.revision) || document.revision < 0 || !Array.isArray(document.snapshots)
     || !Array.isArray(document.entries) || !uniqueIds(document.entries.map(entry => entry?.entryId))
-    || !document.entries.every(entry => validEntry(entry, document) && (entry.status === 'confirmed'
+    || !document.entries.every(entry => validEntry(entry, document.driverRef, lineCatalog) && (entry.status === 'confirmed'
       || (entry.status === 'draft' && !Object.hasOwn(entry, 'confirmation'))))) throw new AppError('storage_read')
   let last: LineTrainingSnapshot | undefined
   for (const source of document.snapshots) {
     checkLineContent(source)
     if (source.documentId !== document.documentId || source.driverRef !== document.driverRef || !sameHeader(source.header, document.header)
+      || source.template.version > document.template.version || (last && source.template.version < last.template.version)
       || Object.keys(validateDriverFields(source.header)).length || source.sourceVersion !== (last?.sourceVersion ?? 0) + 1
       || !Number.isSafeInteger(source.confirmedRevision) || source.confirmedRevision <= (last?.confirmedRevision ?? 0)
       || source.confirmedRevision > document.revision || !isConfirmationTime(source.confirmedThrough)
       || (last && isEarlier(source.confirmedThrough, last.confirmedThrough))
-      || !Array.isArray(source.entries) || !uniqueIds(source.entries.map(entry => entry?.entryId))
-      || !source.entries.every(entry => validConfirmedEntry(entry, source))) throw new AppError('line_history')
+      || !Array.isArray(source.entries) || !uniqueIds(source.entries.map(entry => entry?.entryId))) throw new AppError('line_history')
+    if (source.template.version === lineTemplateV1.version ? source.previouslyRecordedLines !== undefined
+      : !sameLineRows(source.previouslyRecordedLines, previouslyRecordedLines(source.entries))) throw new AppError('line_history')
+    const sourceLines = [...source.template.lines, ...(source.previouslyRecordedLines ?? [])]
+    if (!source.entries.every(entry => validConfirmedEntry(entry, source, sourceLines))) throw new AppError('line_history')
     const oldEntries = last?.entries ?? []
     const newEntries = source.entries.slice(oldEntries.length)
     if (!newEntries.length || !oldEntries.every((entry, index) => sameEntry(entry, source.entries[index]))
@@ -201,11 +215,18 @@ export function validateSavedLine(document: LineTraining) {
   for (const entry of document.entries) {
     if (entry.status === 'draft') continue
     const frozen = history.get(entry.entryId)
-    if (!frozen || !validConfirmedEntry(entry, last!) || !sameEntry(entry, frozen)) throw new AppError('line_history')
+    if (!frozen || !validConfirmedEntry(entry, last!, lineCatalog) || !sameEntry(entry, frozen)) throw new AppError('line_history')
     history.delete(entry.entryId)
   }
   if (history.size) throw new AppError('line_history')
   return document
+}
+
+export function upgradeLineTraining(document: LineTraining): LineTraining {
+  validateSavedLine(document)
+  return document.template.version === lineTemplateV1.version
+    ? { ...document, template: structuredClone(lineTemplateV2) }
+    : document
 }
 
 export function lineExportSource(document: LineTraining, sourceVersion?: number) {
@@ -229,7 +250,7 @@ export function checkLineSelection(document: LineTraining, entryIds: string[], d
     if (entry.author.id !== driverActorId || !validAuthor(entry, document.driverRef)) {
       issues.push({ entryId, text: 'Denne registreringen må fylles ut av sjåføren i riktig sjåførkontekst.' })
     }
-    const errors = lineEntryErrors(entry, document.template, now)
+    const errors = lineEntryErrors(entry, lineCatalog, now)
     for (const field of entryFields) {
       const error = errors[field]
       if (error) issues.push({ entryId, field, text: error })
@@ -252,7 +273,10 @@ function saveLineTraining(document: LineTraining, command: SaveLineTraining, dri
     if (change.kind === 'remove') entries.delete(change.entryId)
     else {
       if (previous && isEarlier(editedAt, previous.editedAt)) throw new AppError('line_clock')
-      if (change.fields.lineId && !document.template.lines.some(line => line.id === change.fields.lineId)) throw new AppError('line_template')
+      const { lineId } = change.fields
+      if (lineId && lineId !== previous?.lineId && !document.template.lines.some(line => line.id === lineId)) {
+        throw new AppError('line_template')
+      }
       entries.set(change.entryId, { ...change.fields, entryId: change.entryId, status: 'draft',
         recordedAt: previous?.recordedAt ?? editedAt, editedAt, author: previous?.author ?? author })
     }
@@ -262,7 +286,7 @@ function saveLineTraining(document: LineTraining, command: SaveLineTraining, dri
 
 export function applyLineCommand(document: LineTraining, command: SaveLineTraining | ConfirmLineTrainingEntries,
   driver: DriverReference, driverActorId: string): LineTraining {
-  validateSavedLine(document)
+  document = upgradeLineTraining(document)
   if (document.documentId !== command.documentId || document.driverRef !== command.driverRef || driver.id !== document.driverRef) {
     throw new AppError('line_document_missing')
   }
@@ -289,9 +313,10 @@ export function applyLineCommand(document: LineTraining, command: SaveLineTraini
     entry.entryId, { ...entry, status: 'confirmed', confirmation } satisfies ConfirmedLineEntry,
   ]))
   const revision = document.revision + 1
+  const entries = [...(previous?.entries ?? []), ...confirmed.values()]
   const snapshot: LineTrainingSnapshot = structuredClone({
     documentType, documentId, driverRef, header, template, ruleVersion, pdfLayoutVersion, sourceVersion,
-    confirmedRevision: revision, confirmedThrough: confirmedAt, entries: [...(previous?.entries ?? []), ...confirmed.values()],
+    confirmedRevision: revision, confirmedThrough: confirmedAt, entries, previouslyRecordedLines: previouslyRecordedLines(entries),
   })
   return { ...document, revision, entries: document.entries.map(entry => confirmed.get(entry.entryId) ?? entry),
     snapshots: [...document.snapshots, snapshot] }

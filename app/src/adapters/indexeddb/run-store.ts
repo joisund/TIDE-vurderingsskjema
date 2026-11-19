@@ -23,12 +23,12 @@ import {
   technicalSummary, validateSavedTechnical, validateTechnicalCommand,
 } from '../../domain/technical-training.ts'
 import type { TechnicalCommand, TechnicalReadProblem, TechnicalReceipt, TechnicalSelection, TechnicalTraining } from '../../domain/technical-training.ts'
-import { applyLineCommand, createLineTraining, lineDocumentType, lineSummary, validateLineCommand, validateSavedLine } from '../../domain/line-training.ts'
+import { applyLineCommand, createLineTraining, lineDocumentType, lineSummary, upgradeLineTraining, validateLineCommand } from '../../domain/line-training.ts'
 import type { LineCommand, LineReadProblem, LineReceipt, LineSelection, LineTraining } from '../../domain/line-training.ts'
 import type { ErrorCode } from '../../domain/run.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 const META = 'meta'
 const RUNS = 'runs'
@@ -123,6 +123,7 @@ function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
   const stores = [META, RUNS, COMMANDS]
   if (!legacy) stores.push(DRIVERS)
   if (previousVersion >= 5) stores.push(TECHNICAL_DOCUMENTS)
+  if (previousVersion >= 6) stores.push(LINE_DOCUMENTS)
   for (const name of stores) {
     const request = tx.objectStore(name).openCursor()
     request.onsuccess = () => {
@@ -137,14 +138,19 @@ function migrateEnvelopes(tx: IDBTransaction, previousVersion: number) {
         if (name !== META || cursor.key === SESSION) {
           const record = cursor.value as Envelope<unknown>
           if (record?.schemaVersion !== previousVersion || !Object.hasOwn(record, 'data')) {
-            if (name === TECHNICAL_DOCUMENTS) {
+            if (name === TECHNICAL_DOCUMENTS || name === LINE_DOCUMENTS) {
               cursor.continue()
               return
             }
             throw new AppError('unsupported_schema')
           }
           // Historiske snapshots og kvitteringer beholder originalt innhold.
-          const data = legacy && name === RUNS ? migrateRun(cursor.key, record.data as Run, drivers) : record.data
+          let data = record.data
+          if (legacy && name === RUNS) data = migrateRun(cursor.key, data as Run, drivers)
+          if (name === LINE_DOCUMENTS) {
+            try { data = upgradeLineTraining(data as LineTraining) }
+            catch { /* Behold dokumentet slik at lesing kan vise feilen for bare denne oversikten. */ }
+          }
           cursor.update({ ...record, data, schemaVersion: SCHEMA_VERSION })
         }
         cursor.continue()
@@ -173,7 +179,7 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
         return
       }
       if (event.oldVersion < 5) request.result.createObjectStore(TECHNICAL_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
-      request.result.createObjectStore(LINE_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
+      if (event.oldVersion < 6) request.result.createObjectStore(LINE_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
       if (event.oldVersion === 0) {
         const db = request.result
         db.createObjectStore(META).add({ schemaVersion: SCHEMA_VERSION }, SCHEMA)
@@ -352,7 +358,7 @@ function assertDocumentSelection(session: SavedSession, selection: DocumentSelec
 }
 
 function readLine(record: SavedLine, documentId: string) {
-  const document = validateSavedLine(check(record))
+  const document = upgradeLineTraining(check(record))
   if (document.documentId !== documentId) throw new AppError('line_document_missing')
   return document
 }

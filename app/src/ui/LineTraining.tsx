@@ -2,8 +2,10 @@ import { useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { Ref } from 'react'
 import type { LineTrainingView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { DownloadLinePdf } from '../application/run-pdf.ts'
-import { checkLineSelection, lineEntryErrors } from '../domain/line-training.ts'
-import type { ConfirmLineTrainingEntries, LineDraftEntry, LineEntryFields, LineHeader, LineIssue } from '../domain/line-training.ts'
+import type { LineTemplateRow } from '../content/line-training.v1.ts'
+import { lineCatalog } from '../content/line-training.v2.ts'
+import { checkLineSelection, lineEntryErrors, previouslyRecordedLines } from '../domain/line-training.ts'
+import type { ConfirmedLineEntry, ConfirmLineTrainingEntries, LineDraftEntry, LineEntryFields, LineHeader, LineIssue } from '../domain/line-training.ts'
 import { AppError } from '../domain/run.ts'
 import type { Actor } from '../domain/run.ts'
 import { Modal } from './AssessmentMatrix.tsx'
@@ -39,6 +41,8 @@ type Review = {
 
 const headerLabels = { driverName: 'Kandidatnavn', employeeNumber: 'Fiktivt ansattnummer' } satisfies Record<keyof LineHeader, string>
 const headerFields = Object.keys(headerLabels) as (keyof LineHeader)[]
+const catalogById = new Map(lineCatalog.map(line => [line.id, line]))
+const previouslyRecordedLabel = 'Tidligere registrert utenfor grunnkurset'
 
 function lineProblem(error: unknown) {
   if (error instanceof AppError && (error.code === 'stale' || error.code === 'locked')) {
@@ -73,6 +77,27 @@ function DownloadHistory({ saved, draftCount, busy, download, report }: {
   </section>
 }
 
+function LineOverviewRows({ lines, confirmed, drafts = [] }: {
+  lines: LineTemplateRow[]
+  confirmed: ConfirmedLineEntry[]
+  drafts?: LineEntryFields[]
+}) {
+  return <ul className="line-rows">{lines.map(line => {
+    const dated = confirmed.filter(entry => entry.lineId === line.id).toSorted((a, b) => a.drivenDate.localeCompare(b.drivenDate))
+    const draftCount = drafts.filter(entry => entry.lineId === line.id).length
+    return <li key={line.id} className="line-row" data-line-id={line.id}>
+      <h3>Linje {line.label}</h3>
+      {line.note && <p className="technical-note">{line.note}</p>}
+      {draftCount > 0 && <p>{draftCount} utkast</p>}
+      {dated.length ? <ul className="line-dates">{dated.map(entry => <li key={entry.entryId} data-entry-id={entry.entryId}>
+        <p><CalendarDate value={entry.drivenDate} /> · <strong>Bekreftet</strong></p>
+        <p>Utfylt av {entry.author.name} · Sjåfør</p>
+        <p>Bekreftet av {entry.confirmation.actor.name} · Instruktør · <ConfirmationTime value={entry.confirmation.confirmedAt} /></p>
+      </li>)}</ul> : <p>Ingen bekreftet kjøredato</p>}
+    </li>
+  })}</ul>
+}
+
 export function LineTrainingForm({ ref, initial, actor, application, navigating, suspended, download, report, onStored, onDriverRole }: Props) {
   const draft = useLineDraft(initial, actor, application, report, suspended)
   const { saved, header, entries, dirty } = draft
@@ -93,7 +118,9 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
   const blocked = busy || navigating
   const drafts = entries.filter(entry => entry.status === 'draft')
   const confirmed = saved.entries.filter(entry => entry.status === 'confirmed')
-  const lines = new Map(saved.template.lines.map(line => [line.id, line]))
+  const recordedExtraLines = previouslyRecordedLines(saved.entries)
+  const savedEntries = new Map(saved.entries.map(entry => [entry.entryId, entry]))
+  const standardIds = new Set(saved.template.lines.map(line => line.id))
   const firstDriverIssue = issues.find(issue => issue.entryId)
   const now = new Date().toISOString()
 
@@ -242,7 +269,7 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
           {headerFields.filter(field => draft.changes.header[field] !== undefined).map(field =>
             <li key={field}>{headerLabels[field]} · {draft.changes.header[field]}</li>)}
           {[...draft.changes.entries].map(([id, fields]) => <li key={id}>
-            {fields ? `Linje ${lines.get(fields.lineId)?.label ?? 'ikke valgt'} · Kjøredato ${fields.drivenDate || 'mangler'}` : 'Fjern utkast'}
+            {fields ? `Linje ${catalogById.get(fields.lineId)?.label ?? 'ikke valgt'} · Kjøredato ${fields.drivenDate || 'mangler'}` : 'Fjern utkast'}
             {' · Registrering '}{id}
           </li>)}
         </ul>
@@ -294,7 +321,7 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
         <h3 id="line-issues" tabIndex={-1}>Mangler før bekreftelse</h3>
         <ul>{issues.map((issue, index) => {
           const entry = drafts.find(entry => entry.entryId === issue.entryId)
-          const row = lines.get(entry?.lineId ?? '')
+          const row = catalogById.get(entry?.lineId ?? '')
           const target = issue.entryId ? `line-entry-${issue.entryId}` : issue.field && `line-header-${issue.field}`
           const text = entry ? `${row ? `Linje ${row.label}` : 'Uten valgt linje'} · ${entry.drivenDate || 'Kjøredato mangler'}. ${issue.text}` : issue.text
           return <li key={index}>{target ? <a href={`#${target}`} onClick={event => {
@@ -312,12 +339,19 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
       <ul className="line-rows">
         {drafts.map((entry, index) => {
           const { entryId, lineId, drivenDate } = entry
-          const line = lines.get(lineId)
-          const errors = lineEntryErrors(entry, saved.template, now)
+          const line = catalogById.get(lineId)
+          const savedLineId = savedEntries.get(entryId)?.lineId
+          const extraId = savedLineId && !standardIds.has(savedLineId) ? savedLineId : undefined
+          const pendingChange = draft.pendingEntryChanges?.get(entryId)
+          const availableExtraId = pendingChange === undefined || pendingChange?.lineId === extraId ? extraId : undefined
+          const selectable = availableExtraId
+            ? lineCatalog.filter(row => standardIds.has(row.id) || row.id === availableExtraId) : saved.template.lines
+          const errors = lineEntryErrors(entry, lineCatalog, now)
           const description = `Registrering ${index + 1} · ${line ? `Linje ${line.label}` : 'Linje mangler'} · ${drivenDate || 'Kjøredato mangler'}`
           return <li key={entryId} className="line-row" id={`line-entry-${entryId}`} data-entry-id={entryId} tabIndex={-1}>
             <h3>{description}</h3>
             <p className="run-status">Utkast</p>
+            {lineId === extraId && <p>{previouslyRecordedLabel}</p>}
             {line?.note && <p className="technical-note">{line.note}</p>}
             {canFill && <div className="form-fields">
               <div className="field">
@@ -326,7 +360,9 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
                   aria-invalid={Boolean(errors.lineId) || undefined} aria-describedby={errors.lineId ? `line-code-error-${entryId}` : undefined}
                   onChange={event => setEntryField(entry, 'lineId', event.currentTarget.value)}>
                   <option value="">Velg linje</option>
-                  {saved.template.lines.map(row => <option key={row.id} value={row.id}>{row.label}</option>)}
+                  {selectable.map(row => <option key={row.id} value={row.id}>
+                    {row.label}{row.id === extraId && ' · Tidligere registrert'}
+                  </option>)}
                 </select>
                 {errors.lineId && <p className="field-error" id={`line-code-error-${entryId}`}>{errors.lineId}</p>}
               </div>
@@ -361,30 +397,23 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
     <DownloadHistory saved={saved} draftCount={drafts.length} busy={blocked} download={download} report={report} />
     <section className="baseline-entry" aria-labelledby="line-catalog">
       <h2 id="line-catalog">Linjer og bekreftede kjøredatoer{saved.snapshots.length > 0 && ` · Nyeste historikkversjon ${saved.snapshots.length}`}</h2>
-      <ul className="line-rows">
-        {saved.template.lines.map(line => {
-          const dated = confirmed.filter(entry => entry.lineId === line.id).toSorted((a, b) => a.drivenDate.localeCompare(b.drivenDate))
-          return <li key={line.id} className="line-row" data-line-id={line.id}>
-            <h3>Linje {line.label}</h3>
-            {line.note && <p className="technical-note">{line.note}</p>}
-            {dated.length ? <ul className="line-dates">{dated.map(entry => <li key={entry.entryId} data-entry-id={entry.entryId}>
-              <p><CalendarDate value={entry.drivenDate} /> · <strong>Bekreftet</strong></p>
-              <p>Utfylt av {entry.author.name} · Sjåfør</p>
-              <p>Bekreftet av {entry.confirmation.actor.name} · Instruktør · <ConfirmationTime value={entry.confirmation.confirmedAt} /></p>
-            </li>)}</ul> : <p>Ingen bekreftet kjøredato</p>}
-          </li>
-        })}
-      </ul>
+      <p>Standardlinjer i grunnkurset</p>
+      <LineOverviewRows lines={saved.template.lines} confirmed={confirmed} />
     </section>
+    {recordedExtraLines.length > 0 && <section className="baseline-entry" aria-labelledby="line-previously-recorded">
+      <h2 id="line-previously-recorded">{previouslyRecordedLabel}</h2>
+      <LineOverviewRows lines={recordedExtraLines} confirmed={confirmed} drafts={saved.entries.filter(entry => entry.status === 'draft')} />
+    </section>}
     {review && canReview && <Modal title="Bekreft registreringer" trigger={review.trigger} fallbackFocus={candidateHeading}
       blocking={busy} dismiss={clearDialogs}>
       <p>{review.document.header.driverName} · Fiktivt ansattnummer {review.document.header.employeeNumber}</p>
       <p>Bare registreringene i dette utvalget låses permanent.</p>
       <ul className="line-rows">
         {review.entries.map(entry => {
-          const line = review.document.template.lines.find(line => line.id === entry.lineId)!
+          const line = catalogById.get(entry.lineId)!
           return <li key={entry.entryId} className="line-row">
             <strong>Linje {line.label} · <CalendarDate value={entry.drivenDate} /></strong>
+            {!review.document.template.lines.some(row => row.id === line.id) && <p>{previouslyRecordedLabel}</p>}
             {line.note && <p>{line.note}</p>}
             <p>Utfylt av {entry.author.name} · Sjåfør</p>
           </li>

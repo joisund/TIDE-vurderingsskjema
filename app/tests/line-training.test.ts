@@ -5,12 +5,15 @@ import { DATABASE_NAME, IndexedDbRunStore } from '../src/adapters/indexeddb/run-
 import { RunApplication } from '../src/application/run-application.ts'
 import { createLinePdfDownload } from '../src/application/run-pdf.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
+import { extraLines } from '../src/content/line-training.v2.ts'
 import { lineExportSource, validateSavedLine } from '../src/domain/line-training.ts'
 import type { LineEntryChange, LineSelection, LineTraining } from '../src/domain/line-training.ts'
+import { lineTrainingV1Fixture, seedLineTrainingV1 } from './fixtures/line-training-v1.ts'
 
 const person = { driverName: 'Åse Fiktiv öä', employeeNumber: 'DEMO-L33' }
 const date = '2025-01-14'
-const labels = '20|21|22|X23|24|26|X27|28|X29|30|X31|X32|33 (M1)|34 (M2)|X35|X36|40|42|X43|X44|413|421|425|428|450|550'.split('|')
+const labels = '20|21|22|X23|24|26|X27|28|X29|X31|X32|33 (M1)|34 (M2)|X35|X36|40|42|X43|X44|413|550'.split('|')
+const standardIds = 'L01 L02 L03 L04 L05 L06 L07 L08 L09 L11 L12 L13 L14 L15 L16 L17 L18 L19 L20 L21 L26'.split(' ')
 
 async function fixture() {
   const factory = new IDBFactory()
@@ -61,9 +64,11 @@ test('oppretter linjeoversikt uavhengig av teknisk skjema og løp med eksakt mal
   assert.deepEqual(doc.header, person)
   assert.deepEqual(doc.entries, [])
   assert.deepEqual(doc.snapshots, [])
+  assert.equal(doc.template.version, 2)
   assert.deepEqual(doc.template.lines.map(line => line.label), labels)
-  assert.deepEqual(doc.template.lines.map(line => line.id), labels.map((_, index) => `L${String(index + 1).padStart(2, '0')}`))
-  assert.equal(doc.template.lines[9].note, 'Kjøres med leddbuss. Egen opplæring')
+  assert.deepEqual(doc.template.lines.map(line => line.id), standardIds)
+  assert.deepEqual(extraLines.map(line => [line.id, line.label]), [['L10', '30'], ['L22', '421'], ['L23', '425'], ['L24', '428'], ['L25', '450']])
+  assert.equal(extraLines[0].note, 'Kjøres med leddbuss. Egen opplæring')
   await assert.rejects(app.readLineSnapshot(receipt), { code: 'line_source_missing' })
   const view = await newTab().open()
   assert.equal(view.lineTraining?.documentId, receipt.documentId)
@@ -81,10 +86,70 @@ test('oppretter linjeoversikt uavhengig av teknisk skjema og løp med eksakt mal
   await assert.rejects(app.readLineTraining(separate), { code: 'wrong_role' })
 })
 
+test('oppgraderer v6 til grunnkursmal v2, beholder innhold og kvitteringer og isolerer en ugyldig oversikt', async () => {
+  const legacy = lineTrainingV1Fixture()
+  const factory = new IDBFactory()
+  await seedLineTrainingV1(legacy, factory)
+  const old = await new Promise<IDBDatabase>((resolve, reject) => {
+    const open = factory.open(DATABASE_NAME, 6)
+    open.onsuccess = () => resolve(open.result)
+    open.onerror = () => reject(open.error)
+  })
+  let versionChanged = false
+  old.onversionchange = () => { versionChanged = true; old.close() }
+  const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, () => crypto.randomUUID())
+  const view = await app.open()
+  assert.ok(versionChanged)
+  assert.throws(() => old.transaction('lineDocuments', 'readwrite'), { name: 'InvalidStateError' })
+  await assert.rejects(new Promise((resolve, reject) => {
+    const open = factory.open(DATABASE_NAME, 6)
+    open.onsuccess = () => resolve(open.result)
+    open.onerror = () => reject(open.error)
+  }), { name: 'VersionError' })
+  const { document, receipt, command } = legacy
+  const read = () => app.readLineTraining(receipt)
+  const migrated = await read()
+  assert.equal(migrated.template.version, 2)
+  assert.deepEqual(migrated.template.lines.map(line => line.id), standardIds)
+  assert.deepEqual({ ...migrated, template: document.template }, document)
+  assert.deepEqual(await app.executeLineTraining(command), receipt)
+  assert.equal(view.lineTraining?.documentId, receipt.documentId)
+  assert.deepEqual(view.lineDocuments.find(line => line.documentId === legacy.corruptId), {
+    documentId: legacy.corruptId, documentType: 'line-training', error: 'line_version',
+  })
+  let storedTemplateVersion: number | undefined
+  await changeStoredLine(factory, receipt, current => { storedTemplateVersion = current.template.version })
+  assert.equal(storedTemplateVersion, 2)
+
+  const { actor: driver } = await app.changeRole('sjåfør')
+  for (const { id } of extraLines) {
+    await assert.rejects(app.executeLineTraining(app.newSaveLineCommand(driver, migrated, { changes: [newEntry(id, date)] })), { code: 'line_template' })
+  }
+  const draft = migrated.entries[1]
+  const edit = { entryId: draft.entryId, kind: 'edit' as const, fields: { lineId: 'L22', drivenDate: '2025-04-15' } }
+  await assert.rejects(app.executeLineTraining(app.newSaveLineCommand(driver, migrated, {
+    changes: [{ ...edit, fields: { ...edit.fields, lineId: 'L10' } }],
+  })), { code: 'line_template' })
+  const standard = newEntry('L21', date)
+  await app.executeLineTraining(app.newSaveLineCommand(driver, migrated, { changes: [edit, standard] }))
+  const { actor: instructor } = await app.changeRole('instruktør')
+  const changed = await read()
+  assert.deepEqual(changed.entries[1], { ...draft, ...edit.fields, editedAt: changed.entries[1].editedAt })
+  await app.executeLineTraining(app.newConfirmLineCommand(instructor, changed, [draft.entryId, standard.entryId], 'Astrid Fiktiv'))
+  const source = await app.readLineSnapshot(receipt)
+  assert.deepEqual(source.entries[0], document.snapshots[0].entries[0])
+  assert.deepEqual(source.entries.map(entry => entry.lineId), ['L10', 'L22', 'L21'])
+  assert.deepEqual(source.previouslyRecordedLines, extraLines.slice(0, 2))
+  assert.deepEqual(await app.readLineSnapshot(receipt, 1), document.snapshots[0])
+  const altered = await read()
+  altered.snapshots[1].previouslyRecordedLines?.pop()
+  assert.throws(() => validateSavedLine(altered), { code: 'line_history' })
+})
+
 test('valgt bekreftelse er atomisk og idempotent, ufullstendig uvalgt utkast blir utenfor frosset historikk', async t => {
   const { app, instructor, receipt, read, newTab } = await fixture()
-  const first = newEntry('L10', date)
-  const duplicate = newEntry('L10', date)
+  const first = newEntry('L01', date)
+  const duplicate = newEntry('L01', date)
   const incomplete = newEntry('L03', '2025-')
   const wrongDate = newEntry('L02', '2025-02-29')
   const before = await read()
@@ -109,7 +174,7 @@ test('valgt bekreftelse er atomisk og idempotent, ufullstendig uvalgt utkast bli
   await tab.open()
   const edited = (await tab.changeRole('sjåfør')).actor
   await tab.executeLineTraining(tab.newSaveLineCommand(edited, drafts, {
-    changes: [{ kind: 'edit', entryId: first.entryId, fields: { lineId: 'L10', drivenDate: '2025-01-13' } }],
+    changes: [{ kind: 'edit', entryId: first.entryId, fields: { lineId: 'L01', drivenDate: '2025-01-13' } }],
   }))
   await tab.changeRole('instruktør')
   await assert.rejects(app.executeLineTraining(stale), { code: 'stale' })
@@ -186,15 +251,15 @@ test('eksporten avviser feil historikk eller type og beholder selektert kilde ve
 
 test('avviser tilbakedatert registreringstid og bekreftelse atomisk, og godtar lik kildegrense', async () => {
   const { app, instructor, read } = await fixture()
-  const first = newEntry('L10', date)
-  const second = newEntry('L10', date)
+  const first = newEntry('L01', date)
+  const second = newEntry('L01', date)
   const firstTime = '2026-08-15T13:00:00.12345Z'
   const earlier = '2026-08-15T13:00:00.12344Z'
   const { actor: driver } = await app.changeRole('sjåfør')
   const save = app.newSaveLineCommand(driver, await read(), { changes: [first] })
   await app.executeLineTraining({ ...save, payload: { ...save.payload, editedAt: firstTime } })
   const draft = await read()
-  const edit = app.newSaveLineCommand(driver, draft, { changes: [{ ...first, kind: 'edit', fields: { lineId: 'L10', drivenDate: date } }] })
+  const edit = app.newSaveLineCommand(driver, draft, { changes: [{ ...first, kind: 'edit', fields: { lineId: 'L01', drivenDate: date } }] })
   await assert.rejects(app.executeLineTraining({ ...edit, payload: { ...edit.payload, editedAt: earlier } }), { code: 'line_clock' })
   await app.changeRole('instruktør')
   const confirm = app.newConfirmLineCommand(instructor, draft, [first.entryId], 'Øyvind Fiktiv')

@@ -8,10 +8,11 @@ import { useAutosaveDeadline } from './use-autosave-deadline.ts'
 type EditableEntry = LineEntryFields & { entryId: string; status: 'draft' }
 type Changes = { header: Partial<LineHeader>; entries: Map<string, LineEntryFields | null> }
 type ReadRestriction = 'unreadable' | 'unverified'
-type Draft = {
-  saved: LineTrainingView; changes: Changes; writing: boolean; error?: unknown; conflict?: true; readRestriction?: ReadRestriction
-}
 type PendingWrite = { command: SaveLineTraining; changes: Changes }
+type Draft = {
+  saved: LineTrainingView; changes: Changes; writing: boolean; pendingWrite?: PendingWrite
+  error?: unknown; conflict?: true; readRestriction?: ReadRestriction
+}
 
 function emptyChanges(): Changes {
   return { header: {}, entries: new Map() }
@@ -47,7 +48,6 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
   report: (error: unknown) => void, suspended: boolean) {
   const [state, setState] = useState<Draft>(() => ({ saved: initial, changes: emptyChanges(), writing: false }))
   const current = useRef(state)
-  const retry = useRef<PendingWrite>(undefined)
   const active = useRef<Promise<boolean>>(undefined)
   const suspendedNow = useRef(suspended)
   const deadline = useAutosaveDeadline()
@@ -96,8 +96,7 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
 
   function setConflict(error: unknown, saved = current.current.saved, readRestriction?: ReadRestriction) {
     deadline.cancel()
-    retry.current = undefined
-    publish({ ...current.current, saved, writing: false, error, conflict: true, readRestriction })
+    publish({ ...current.current, saved, writing: false, pendingWrite: undefined, error, conflict: true, readRestriction })
   }
 
   function startWrite() {
@@ -115,19 +114,17 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
   }
 
   async function write() {
-    retry.current ??= startWrite()
-    const attempt = retry.current
+    const attempt = current.current.pendingWrite ?? startWrite()
     deadline.reset()
     if (!attempt) {
       publish({ ...current.current, changes: emptyChanges(), writing: false })
       return true
     }
-    publish({ ...current.current, writing: true })
+    publish({ ...current.current, writing: true, pendingWrite: attempt })
     try {
       const receipt = await application.withOpenStorage(() => application.executeLineTraining(attempt.command))
       const saved = await readLatest()
       if (current.current.readRestriction) return false
-      retry.current = undefined
       const pending = current.current.changes
       const changes: Changes = {
         header: Object.fromEntries(Object.entries(pending.header).filter(([name, value]) =>
@@ -156,8 +153,8 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
           setConflict(error, undefined, 'unverified')
         }
       } else if (!current.current.readRestriction) {
-        if (error instanceof AppError && error.code === 'line_clock') retry.current = undefined
-        publish({ ...current.current, writing: false, error })
+        const pendingWrite = error instanceof AppError && error.code === 'line_clock' ? undefined : attempt
+        publish({ ...current.current, writing: false, pendingWrite, error })
       }
       return false
     }
@@ -172,7 +169,7 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
         continue
       }
       if (current.current.error || current.current.conflict) return false
-      if (!retry.current && !hasChanges(current.current.changes)) {
+      if (!current.current.pendingWrite && !hasChanges(current.current.changes)) {
         deadline.reset()
         return true
       }
@@ -201,7 +198,6 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
     try {
       const latest = await readWorkspace()
       deadline.cancel()
-      retry.current = undefined
       if (matchesLineView(latest, actor, initial)) publish({ saved: latest.lineTraining, changes: emptyChanges(), writing: false })
       return latest
     } catch (error) {
@@ -210,9 +206,10 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
     }
   }
 
-  const { saved, changes, conflict, writing, error, readRestriction } = state
+  const { saved, changes, conflict, writing, pendingWrite, error, readRestriction } = state
   return {
     saved, changes, conflict, writing, error, readRestriction, dirty: writing || Boolean(error) || hasChanges(changes),
+    pendingEntryChanges: pendingWrite?.changes.entries,
     header: conflict ? saved.header : { ...saved.header, ...changes.header },
     entries: conflict ? saved.entries : applyPendingEntries(saved.entries, changes),
     hasLocalChanges: () => Boolean(active.current || hasChanges(current.current.changes)),

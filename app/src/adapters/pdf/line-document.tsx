@@ -1,4 +1,5 @@
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
+import type { LineTemplateRow } from '../../content/line-training.v1.ts'
 import type { LineTrainingSnapshot } from '../../domain/line-training.ts'
 import { assertGlyphs, confirmationTime, dateText, flowing, pdfFont, textWidth } from './closure-document.tsx'
 
@@ -45,7 +46,7 @@ function height(rows: TextRow[]) {
   return rows.length * lineHeight + blockExtra
 }
 
-function composePages(source: LineTrainingSnapshot) {
+function composePages(source: LineTrainingSnapshot, lines: LineTemplateRow[]) {
   const { header, template, entries } = source
   const pages: Block[][] = [[]]
   let remaining = pageBodyHeight
@@ -80,11 +81,12 @@ function composePages(source: LineTrainingSnapshot) {
     ...textRows(`Mal ${template.id} v${template.version} · Regler v${source.ruleVersion} · PDF v${source.pdfLayoutVersion}`, 9),
   ])
 
-  for (const line of template.lines) {
+  for (const line of lines) {
     const dated = entries.filter(entry => entry.lineId === line.id).toSorted((a, b) => a.drivenDate.localeCompare(b.drivenDate))
     const heading = [
       ...textRows(`Linje ${line.label} · ${line.id}`, fontSize, 700),
       ...(line.note ? textRows(line.note, fontSize, 700) : []),
+      ...(source.previouslyRecordedLines?.includes(line) ? textRows('Tidligere registrert utenfor grunnkurset') : []),
     ]
     const records = dated.map(entry => [
       ...textRows(`Linje ${line.label} · Kjøredato ${dateText(entry.drivenDate)} · ${entry.drivenDate}`, fontSize, 700),
@@ -106,9 +108,12 @@ function composePages(source: LineTrainingSnapshot) {
 
 export function lineDocument({ source, logo }: { source: LineTrainingSnapshot; logo: string }) {
   const { header, template, entries } = source
-  assertGlyphs([header.driverName, header.employeeNumber, ...template.lines.flatMap(line => [line.label, line.note ?? '']),
+  const lines = source.previouslyRecordedLines?.length
+    ? [...template.lines, ...source.previouslyRecordedLines].sort((a, b) => a.id.localeCompare(b.id))
+    : template.lines
+  assertGlyphs([header.driverName, header.employeeNumber, ...lines.flatMap(line => [line.label, line.note ?? '']),
     ...entries.flatMap(entry => [entry.author.name, entry.confirmation.actor.name])])
-  const pages = composePages(source)
+  const pages = composePages(source, lines)
   return (
     <Document title={`Bekreftet linjeopplæring – versjon ${source.sourceVersion}`} language="nb-NO">
       {pages.map((blocks, index) => (

@@ -178,6 +178,8 @@ test('fadder lukker tidlig etter reelle bekreftelser og begge roller leser samme
   expect(closed.closureSnapshot?.history.firstDay.mentorDay?.reviews[criterion.id]?.decision).toBe('rejected')
 
   await role(page).selectOption('sjåfør')
+  await expect(role(page)).toHaveValue('sjåfør')
+  await expect(role(page)).toHaveAttribute('aria-disabled', 'false')
   await expect(fullHistory(page)).toBeVisible()
   await page.getByText('Vurderingspunkter · Dag 1').click()
   await expect(page.getByText('Egen merknad fra fadder')).toBeVisible()

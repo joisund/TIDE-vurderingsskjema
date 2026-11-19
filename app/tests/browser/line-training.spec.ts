@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import type { Download, Page } from '@playwright/test'
 import type { LineTraining } from '../../src/domain/line-training.ts'
+import { lineTrainingV1Fixture, seedLineTrainingV1 } from '../fixtures/line-training-v1.ts'
 
 const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
 const actor = (page: Page, role: string) => page.getByLabel('Simuleringsrolle').selectOption(role)
@@ -19,6 +20,15 @@ async function lineDocument(page: Page) {
   await button(page, 'Opprett ny registrering').click()
   await button(page, 'Ny linjeopplæring').click()
   await expect(page.getByRole('heading', { name: 'Linjeopplæring', exact: true })).toBeVisible()
+}
+
+async function openLegacyLineDocument(page: Page) {
+  const legacy = lineTrainingV1Fixture()
+  await page.route('**/legacy-line-seed', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html>' }))
+  await page.goto('/legacy-line-seed')
+  await page.evaluate(seedLineTrainingV1, legacy)
+  await page.goto('/')
+  return legacy
 }
 
 async function addEntry(page: Page, lineId: string, drivenDate: string) {
@@ -63,6 +73,17 @@ async function readLine(page: Page) {
       })
     } finally { db.close() }
   })
+}
+
+function linePdfTimes(document: LineTraining) {
+  const formatter = new Intl.DateTimeFormat('nb-NO', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    timeZone: 'Europe/Oslo', timeZoneName: 'shortOffset',
+  })
+  const times = document.snapshots.flatMap(source => [source.confirmedThrough, ...source.entries.flatMap(entry => [
+    entry.recordedAt, entry.editedAt, entry.confirmation.confirmedAt,
+  ])])
+  return Object.fromEntries(times.map(time => [time, formatter.format(new Date(time))]))
 }
 
 async function changeStorage(page: Page, change: 'unselect' | number) {
@@ -110,20 +131,23 @@ async function abortLineSaves(page: Page, attempts = 1) {
 test('sjåfør fører en linje i frittstående dokument, instruktør låser et utvalg og begge laster bekreftet historikk', async ({ page }, info) => {
   await page.setViewportSize({ width: 320, height: 630 })
   await lineDocument(page)
-  await expect(page.locator('[data-line-id]')).toHaveCount(26)
-  await expect(page.getByText('Ingen bekreftet kjøredato', { exact: true })).toHaveCount(26)
+  await expect(page.locator('[data-line-id]')).toHaveCount(21)
+  await expect(page.getByRole('heading', { name: 'Linje 413', exact: true })).toBeVisible()
+  await expect(page.getByText('Ingen bekreftet kjøredato', { exact: true })).toHaveCount(21)
   await expect(button(page, 'Last ned bekreftet linjeopplæring')).toHaveCount(0)
   await expect(button(page, 'Legg til registrering')).toHaveCount(0)
   await page.getByLabel('Kandidatnavn').fill('Åse Øvelø äö')
   await actor(page, 'sjåfør')
   await expect(page.getByText('Åse Øvelø äö', { exact: true })).toBeVisible()
-  await addEntry(page, 'L10', '2025-04-13')
+  await addEntry(page, 'L01', '2025-04-13')
+  await expect(entries(page).first().locator('option')).toHaveCount(22)
+  await expect(entries(page).first().locator('option[value="L10"]')).toHaveCount(0)
   await addEntry(page, 'L11', '2025-')
   const getEntryId = () => entries(page).first().getAttribute('data-entry-id')
   const firstId = await getEntryId()
   await actor(page, 'instruktør')
   const checkbox = (row: number) => entries(page).nth(row).getByRole('checkbox')
-  await expect(checkbox(0)).toHaveAccessibleName(/Velg Registrering 1 · Linje 30 · 2025-04-13/)
+  await expect(checkbox(0)).toHaveAccessibleName(/Velg Registrering 1 · Linje 20 · 2025-04-13/)
   await expect(entries(page).first().getByLabel(/^Kjøredato ·/)).toHaveCount(0)
   await checkbox(1).check()
   await button(page, 'Bekreft registreringer').click()
@@ -133,7 +157,6 @@ test('sjåfør fører en linje i frittstående dokument, instruktør låser et u
   await checkbox(0).check()
   await button(page, 'Bekreft registreringer').click()
   const dialog = page.getByRole('dialog', { name: 'Bekreft registreringer' })
-  await expect(dialog.getByText('Kjøres med leddbuss. Egen opplæring', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Lås valgte registreringer' }).click()
   await expect(dialog.getByLabel('Instruktørnavn')).toHaveAttribute('aria-invalid', 'true')
   await page.keyboard.press('Escape')
@@ -141,26 +164,23 @@ test('sjåfør fører en linje i frittstående dokument, instruktør låser et u
   await expect(button(page, 'Bekreft registreringer')).toBeFocused()
   await expect(button(page, 'Last ned bekreftet linjeopplæring')).toHaveCount(0)
   await confirm(page, 'Øyvind Fiktiv')
-  await expect(page.locator('[data-line-id="L10"]')).toContainText('Øyvind Fiktiv')
-  await expect(page.locator(`[data-line-id="L10"] [data-entry-id="${firstId}"]`)).toBeVisible()
+  await expect(page.locator('[data-line-id="L01"]')).toContainText('Øyvind Fiktiv')
+  await expect(page.locator(`[data-line-id="L01"] [data-entry-id="${firstId}"]`)).toBeVisible()
   await expect(entries(page)).toHaveCount(1)
   await expect(page.getByText('1 utkast venter på bekreftelse og inngår ikke i PDF-filen.')).toBeVisible()
   const [first] = await Promise.all([page.waitForEvent('download'), button(page, 'Last ned bekreftet linjeopplæring').click()])
   expect(first.suggestedFilename()).toMatch(/^linjeopplaering-v1-.*\.pdf$/)
   await expectPortraitA4(first)
-  const pdfFixture = process.env.TIDE_LINE_PDF_FIXTURE === '1'
-  const firstDocument = pdfFixture ? await readLine(page) : undefined
-  if (pdfFixture) await first.saveAs(info.outputPath('v1-original.pdf'))
   await actor(page, 'sjåfør')
   await expect(entries(page).first().getByLabel(/^Kjøredato ·/)).toHaveValue('2025-')
   await entries(page).first().getByRole('button', { name: /^Fjern utkast/ }).click()
-  await addEntry(page, 'L10', '2025-04-12')
+  await addEntry(page, 'L01', '2025-04-12')
   await actor(page, 'instruktør')
   await checkbox(0).check()
   await confirm(page, 'Astrid Fiktiv Træn ÆØÅ')
   await expect(page.getByLabel('Bekreftet historikkversjon')).toHaveValue('2')
-  await expect(page.locator('[data-line-id="L10"]')).toContainText('Astrid Fiktiv Træn ÆØÅ')
-  await expect(page.locator('[data-line-id="L10"]')).toContainText('Øyvind Fiktiv')
+  await expect(page.locator('[data-line-id="L01"]')).toContainText('Astrid Fiktiv Træn ÆØÅ')
+  await expect(page.locator('[data-line-id="L01"]')).toContainText('Øyvind Fiktiv')
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Linjeopplæring', exact: true })).toBeVisible()
   await expect(page.getByLabel('Bekreftet historikkversjon')).toHaveValue('2')
@@ -171,34 +191,110 @@ test('sjåfør fører en linje i frittstående dokument, instruktør låser et u
   const [latest] = await Promise.all([page.waitForEvent('download'), button(page, 'Last ned bekreftet linjeopplæring').click()])
   expect(latest.suggestedFilename()).toMatch(/^linjeopplaering-v2-.*\.pdf$/)
   await expectPortraitA4(latest)
+  if (process.env.TIDE_LINE_PDF_FIXTURE === '1') {
+    await latest.saveAs(info.outputPath('standardmal.pdf'))
+    const finalDocument = await readLine(page)
+    await writeFile(info.outputPath('linje-kilder.json'), JSON.stringify({ finalDocument, times: linePdfTimes(finalDocument) }, null, 2), 'utf8')
+  }
   await page.getByLabel('Bekreftet historikkversjon').selectOption('1')
   await expect(page.getByText('Bekreftelser etter versjon 1 inngår ikke i PDF-filen.')).toBeVisible()
   await expect(page.getByRole('heading', { name: /Nyeste historikkversjon 2/ })).toBeVisible()
   const [archived] = await Promise.all([page.waitForEvent('download'), button(page, 'Last ned bekreftet linjeopplæring').click()])
   expect(archived.suggestedFilename()).toBe(first.suggestedFilename())
   await expectPortraitA4(archived)
-  if (pdfFixture && firstDocument) {
-    await latest.saveAs(info.outputPath('v2.pdf'))
-    await archived.saveAs(info.outputPath('v1-nytt-uttak.pdf'))
-    const finalDocument = await readLine(page)
-    expect(finalDocument.snapshots[0]).toEqual(firstDocument.snapshots[0])
-    const formatter = new Intl.DateTimeFormat('nb-NO', {
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-      timeZone: 'Europe/Oslo', timeZoneName: 'shortOffset',
-    })
-    const times = finalDocument.snapshots.flatMap(source => [source.confirmedThrough, ...source.entries.flatMap(entry => [
-      entry.recordedAt, entry.editedAt, entry.confirmation.confirmedAt,
-    ])])
-    await writeFile(info.outputPath('linje-kilder.json'), JSON.stringify({
-      firstDocument, finalDocument, times: Object.fromEntries(times.map(time => [time, formatter.format(new Date(time))])),
-    }, null, 2), 'utf8')
-  }
   await button(page, 'Til dokumentoversikten').click()
   const savedDocument = page.getByRole('button', { name: /^Åpne linjeopplæring/ })
   await expect(savedDocument).toContainText('2 bekreftede registreringer · 1 utkast')
   await savedDocument.click()
   await expect(entries(page).first().getByLabel(/^Kjøredato ·/)).toHaveValue('2025-04-30')
   await expect(page.getByLabel('Bekreftet historikkversjon')).toHaveValue('2')
+})
+
+test('oppgradert grunnkursmal viser tidligere oppføringer og eksporterer gammel og ny kilde', async ({ page }, info) => {
+  await page.setViewportSize({ width: 320, height: 630 })
+  const legacy = await openLegacyLineDocument(page)
+
+  const standard = page.getByRole('region', { name: /Linjer og bekreftede kjøredatoer/ })
+  const history = page.getByRole('region', { name: 'Tidligere registrert utenfor grunnkurset' })
+  await expect(standard.locator('[data-line-id]')).toHaveCount(21)
+  await expect(history.locator('[data-line-id]')).toHaveCount(2)
+  await expect(history.locator('[data-line-id="L10"]')).toContainText('Kjøres med leddbuss. Egen opplæring')
+  await expect(history.locator('[data-line-id="L10"]')).toContainText('Øyvind Fiktiv')
+  await expect(history.locator('[data-line-id="L22"]')).toContainText('1 utkast')
+
+  const download = () => Promise.all([page.waitForEvent('download'), button(page, 'Last ned bekreftet linjeopplæring').click()])
+  const [first] = await download()
+  await expectPortraitA4(first)
+  await actor(page, 'sjåfør')
+  await expect(entries(page).first().getByLabel(/^Linje ·/)).toHaveValue('L22')
+  await expect(entries(page).first()).toContainText('Tidligere registrert utenfor grunnkurset')
+  await entries(page).first().getByLabel(/^Kjøredato ·/).fill('2025-04-15')
+  await addEntry(page, 'L21', '2025-04-12')
+  await expect(entries(page).last().locator('option[value="L22"]')).toHaveCount(0)
+  await actor(page, 'instruktør')
+  const earlierDraft = entries(page).first().getByRole('checkbox')
+  await earlierDraft.check()
+  await button(page, 'Bekreft registreringer').click()
+  const dialog = page.getByRole('dialog', { name: 'Bekreft registreringer' })
+  await expect(dialog.getByText('Tidligere registrert utenfor grunnkurset', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Avbryt', exact: true }).click()
+  await earlierDraft.uncheck()
+  await entries(page).last().getByRole('checkbox').check()
+  await confirm(page, 'Astrid Fiktiv Træn ÆØÅ')
+  await expect(standard.locator('[data-line-id="L21"]')).toContainText('Astrid Fiktiv Træn ÆØÅ')
+  await expect(history.locator('[data-line-id="L10"]')).toContainText('Øyvind Fiktiv')
+  const [latest] = await download()
+  await expectPortraitA4(latest)
+  await page.getByLabel('Bekreftet historikkversjon').selectOption('1')
+  const [archived] = await download()
+  expect(archived.suggestedFilename()).toBe(first.suggestedFilename())
+  await expectPortraitA4(archived)
+
+  const finalDocument = await readLine(page)
+  expect(finalDocument.snapshots[0]).toEqual(legacy.document.snapshots[0])
+  expect(finalDocument.entries[1]).toMatchObject({ lineId: 'L22', drivenDate: '2025-04-15', status: 'draft' })
+  expect(finalDocument.snapshots[1].entries.map(entry => entry.lineId)).toEqual(['L10', 'L21'])
+  if (process.env.TIDE_LINE_PDF_FIXTURE === '1') {
+    await first.saveAs(info.outputPath('v1-original.pdf'))
+    await latest.saveAs(info.outputPath('v2.pdf'))
+    await archived.saveAs(info.outputPath('v1-nytt-uttak.pdf'))
+    await writeFile(info.outputPath('linje-kilder.json'), JSON.stringify({
+      firstDocument: legacy.document, finalDocument, times: linePdfTimes(finalDocument),
+    }, null, 2), 'utf8')
+  }
+})
+
+test('avbrutt bytte fra tidligere linje skjuler valget frem til kommandoen er ferdig', async ({ page }) => {
+  const legacy = await openLegacyLineDocument(page)
+  await actor(page, 'sjåfør')
+  const entry = entries(page).first()
+  const line = entry.getByLabel(/^Linje ·/)
+  const oldOption = line.locator('option[value="L22"]')
+  const history = page.getByRole('region', { name: 'Tidligere registrert utenfor grunnkurset' })
+  const historicRow = history.locator('[data-line-id="L22"]')
+  await expect(oldOption).toHaveCount(1)
+  await abortLineSaves(page)
+  await entry.getByRole('button', { name: /^Fjern utkast/ }).click()
+  await expect(entry).toHaveCount(0)
+  await expect(button(page, retry)).toBeVisible()
+  await expect(historicRow).toContainText('1 utkast')
+  await button(page, discard).click()
+  await expect(line).toHaveValue('L22')
+
+  await abortLineSaves(page, 2)
+  await line.selectOption('L01')
+  await expect(button(page, retry)).toBeVisible()
+  await expect(historicRow).toContainText('1 utkast')
+  await expect(oldOption).toHaveCount(0)
+  await entry.getByLabel(/^Kjøredato ·/).fill('2025-04-16')
+  await expect(oldOption).toHaveCount(0)
+  await expect(button(page, retry)).toBeVisible()
+  await button(page, retry).click()
+  await expect(page.getByText('Lagret på denne enheten', { exact: true })).toBeVisible()
+  await expect(historicRow).toHaveCount(0)
+  await expect(oldOption).toHaveCount(0)
+  const saved = (await readLine(page)).entries.find(record => record.entryId === legacy.document.entries[1].entryId)
+  expect(saved).toMatchObject({ lineId: 'L01', drivenDate: '2025-04-16', status: 'draft' })
 })
 
 test('retting bytter til riktig sjåførfelt og sperres hvis den aktive adressen er endret', async ({ page }) => {
@@ -225,7 +321,7 @@ test('retting bytter til riktig sjåførfelt og sperres hvis den aktive adressen
 test('avbrutt linjelagring stopper rollebytte, og utkastet kan lagres på nytt eller forkastes', async ({ page }) => {
   await lineDocument(page)
   await actor(page, 'sjåfør')
-  await addEntry(page, 'L10', '2025-04-11')
+  await addEntry(page, 'L01', '2025-04-11')
   await expect(page.getByText('Lagret på denne enheten', { exact: true })).toBeVisible()
   const date = entries(page).first().getByLabel(/^Kjøredato ·/)
   await abortLineSaves(page)
@@ -257,7 +353,7 @@ test('avbrutt linjelagring stopper rollebytte, og utkastet kan lagres på nytt e
 test('gjenkontroll bevarer separat råtekst når samme linjeoversikt blir uleselig', async ({ page }) => {
   await lineDocument(page)
   await actor(page, 'sjåfør')
-  await addEntry(page, 'L10', '2025-04-11')
+  await addEntry(page, 'L01', '2025-04-11')
   await expect(page.getByText('Lagret på denne enheten', { exact: true })).toBeVisible()
   await abortLineSaves(page)
   await entries(page).first().getByLabel(/^Kjøredato ·/).fill('2025-08-')
@@ -279,7 +375,7 @@ test('gjenkontroll bevarer separat råtekst når samme linjeoversikt blir ulesel
 test('registrering og bekreftelsesdialog flyter uten horisontal rulling med smal visning og stor tekst', async ({ page }) => {
   await lineDocument(page)
   await actor(page, 'sjåfør')
-  await addEntry(page, 'L10', '2025-04-11')
+  await addEntry(page, 'L01', '2025-04-11')
   await actor(page, 'instruktør')
   await entries(page).first().getByRole('checkbox').check()
   await button(page, 'Bekreft registreringer').click()

@@ -323,7 +323,7 @@ test('schema 4 oppgraderer eksisterende sjåfør, profil og løpsdata uten å om
   assert.equal((await upgraded.read()).technical?.documentId, created.documentId)
 })
 
-test('schema 5 beholder aktivt teknisk dokument, frosset kilde og kvittering ved oppgradering til schema 6', async () => {
+test('oppgradering fra schema 5 beholder aktivt teknisk dokument, frosset kilde og kvittering', async () => {
   const id = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
   const actors = { fadder: id(1), sjåfør: id(2), instruktør: id(3) }
   const instructor = { role: 'instruktør' as const, id: actors.instruktør }
@@ -360,7 +360,6 @@ test('schema 5 beholder aktivt teknisk dokument, frosset kilde og kvittering ved
   old.close()
   const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, () => crypto.randomUUID())
   const view = await app.open()
-  assert.equal(SCHEMA_VERSION, 6)
   assert.deepEqual(view.actor, instructor)
   assert.equal(view.technical?.documentId, document.documentId)
   assert.deepEqual(await app.readTechnicalSnapshot(document, true), frozen.snapshot)

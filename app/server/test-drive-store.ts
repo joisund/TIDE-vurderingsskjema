@@ -3,10 +3,11 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { types } from 'node:util'
-import { testDrivePath } from '../src/content/test-drive-api.ts'
+import { testDriveCommentLimits, testDrivePath } from '../src/content/test-drive-api.ts'
 import type {
-  CreateTestDrive, TestDriveAdministration, TestDriveAssignment, TestDriveCandidateAction,
+  CreateTestDrive, TestDriveAdministration, TestDriveAssessmentAction, TestDriveAssignment,
   TestDriveCandidateAssessment, TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail,
+  TestDriveInstructorAssessment, TestDriveInstructorFields, TestDriveInstructorWrite,
   TestDrivePerson, TestDrivePhase, TestDriveRole, TestDriveWorkspace,
 } from '../src/content/test-drive-api.ts'
 import { testDriveV1 } from '../src/content/test-drive.v1.ts'
@@ -73,6 +74,20 @@ const schema = `
     PRIMARY KEY (drive_id, part, request_id),
     FOREIGN KEY (drive_id, part) REFERENCES test_drive_candidate_assessments(drive_id, part)
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS test_drive_instructor_assessments (
+    drive_id TEXT PRIMARY KEY REFERENCES test_drives(id),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    author_id TEXT NOT NULL REFERENCES pilot_people(id),
+    assessment TEXT NOT NULL CHECK (json_type(assessment) = 'object'),
+    submitted_at INTEGER
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS test_drive_instructor_requests (
+    drive_id TEXT NOT NULL REFERENCES test_drive_instructor_assessments(drive_id),
+    request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    author_id TEXT NOT NULL REFERENCES pilot_people(id),
+    PRIMARY KEY (drive_id, request_id), UNIQUE (drive_id, revision)
+  ) STRICT;
   CREATE TABLE IF NOT EXISTS pilot_login_challenges (
     id TEXT PRIMARY KEY, email TEXT NOT NULL, digest TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -137,6 +152,23 @@ function assignment(row: AuthorizedTestDrive): TestDriveAssignment {
 type PilotMail = { email: string; kind: 'code' | 'invitation'; value: string; now: number; expiresAt: number }
 type EnqueueMail = (database: DatabaseSync, message: PilotMail) => void
 type SyncResult<T> = T & (Extract<T, PromiseLike<unknown>> extends never ? unknown : never)
+type UnvalidatedInstructorWrite = Pick<TestDriveInstructorWrite, 'requestId' | 'revision'> & {
+  answers: Record<string, unknown>
+  comments: Record<string, unknown>
+  overallComment: unknown
+  result: unknown
+}
+
+function instructorComment(value: unknown, limit: number) {
+  if (typeof value !== 'string' || value.length > limit) throw new PilotError(400, 'invalid_input')
+  for (const character of value) {
+    const code = character.charCodeAt(0)
+    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+      throw new PilotError(400, 'invalid_input')
+    }
+  }
+  return value
+}
 
 function enqueueLocalMail(database: DatabaseSync, mail: PilotMail) {
   database.prepare(`INSERT INTO pilot_mailbox (email, kind, value, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
@@ -258,7 +290,7 @@ export class TestDriveStore {
   }
 
   detail(row: AuthorizedTestDrive): TestDriveDetail {
-    const { version, source, headerFields, criteria, candidateChoices } = this.template(row)
+    const { version, source, headerFields, criteria, candidateChoices, instructorChoices, resultChoices } = this.template(row)
     const common = {
       ...assignment(row),
       header: JSON.parse(row.header),
@@ -269,10 +301,16 @@ export class TestDriveStore {
     if (row.role === 'candidate') {
       return { ...common, role: 'candidate', candidateAssessments: { before, after } }
     }
-    return { ...common, role: 'instructor', candidateAssessments: {
-      before: { revision: before.revision, submittedAt: before.submittedAt },
-      after: { revision: after.revision, submittedAt: after.submittedAt },
-    } }
+    return {
+      ...common,
+      role: 'instructor',
+      template: { ...common.template, instructorChoices, resultChoices },
+      candidateAssessments: {
+        before: { revision: before.revision, submittedAt: before.submittedAt },
+        after: { revision: after.revision, submittedAt: after.submittedAt },
+      },
+      instructorAssessment: this.instructorAssessment(row.id),
+    }
   }
 
   candidateAssessment(driveId: string, part: TestDriveCandidatePart): TestDriveCandidateAssessment {
@@ -287,7 +325,7 @@ export class TestDriveStore {
     }
   }
 
-  writeCandidateAssessment(run: AuthorizedTestDrive, part: TestDriveCandidatePart, action: TestDriveCandidateAction,
+  writeCandidateAssessment(run: AuthorizedTestDrive, part: TestDriveCandidatePart, action: TestDriveAssessmentAction,
     input: Omit<TestDriveCandidateWrite, 'answers'> & { answers: Record<string, unknown> }, now: number) {
     if (run.role !== 'candidate') throw new PilotError(404, 'run_unavailable')
     const { criteria, candidateChoices } = this.template(run)
@@ -327,6 +365,76 @@ export class TestDriveStore {
       this.database.prepare("UPDATE test_drives SET phase = 'driving' WHERE id = ?").run(run.id)
       return this.detail({ ...run, phase: 'driving' })
     }
+    return this.detail(run)
+  }
+
+  instructorAssessment(driveId: string): TestDriveInstructorAssessment {
+    const saved = this.database.prepare(`
+      SELECT revision, author_id, assessment, submitted_at FROM test_drive_instructor_assessments WHERE drive_id = ?
+    `).get(driveId) as { revision: number; author_id: string; assessment: string; submitted_at: number | null } | undefined
+    if (!saved) {
+      return { revision: 0, authorId: null, submittedAt: null, answers: {}, comments: {}, overallComment: '', result: null }
+    }
+    const assessment = JSON.parse(saved.assessment) as TestDriveInstructorFields
+    return {
+      ...assessment,
+      revision: saved.revision,
+      authorId: saved.author_id,
+      submittedAt: saved.submitted_at === null ? null : new Date(saved.submitted_at).toISOString(),
+    }
+  }
+
+  writeInstructorAssessment(run: AuthorizedTestDrive, action: TestDriveAssessmentAction, input: UnvalidatedInstructorWrite, now: number) {
+    if (run.role !== 'instructor') throw new PilotError(404, 'run_unavailable')
+    const { criteria, instructorChoices, resultChoices } = this.template(run)
+    const criterionIds = new Set<string>(criteria.map(({ id }) => id))
+    const answers: TestDriveInstructorFields['answers'] = {}
+    const comments: TestDriveInstructorFields['comments'] = {}
+    const answerIds = Object.keys(input.answers).sort()
+    for (const id of answerIds) {
+      const choice = instructorChoices.find(choice => choice.id === input.answers[id])
+      if (!criterionIds.has(id) || !choice) throw new PilotError(400, 'invalid_input')
+      answers[id] = choice.id
+    }
+    for (const id of Object.keys(input.comments).sort()) {
+      if (!criterionIds.has(id)) throw new PilotError(400, 'invalid_input')
+      comments[id] = instructorComment(input.comments[id], testDriveCommentLimits.criterion)
+    }
+    const overallComment = instructorComment(input.overallComment, testDriveCommentLimits.overall)
+    const result = resultChoices.find(choice => choice.id === input.result)?.id ?? null
+    if (result === null && input.result !== null) throw new PilotError(400, 'invalid_input')
+
+    const assessment = JSON.stringify({ answers, comments, overallComment, result })
+    const requestHash = digest(JSON.stringify([action, input.revision, assessment]))
+    const receipt = this.database.prepare(`
+      SELECT request_hash, author_id FROM test_drive_instructor_requests WHERE drive_id = ? AND request_id = ?
+    `).get(run.id, input.requestId)
+    if (receipt) {
+      if (receipt.request_hash !== requestHash || receipt.author_id !== run.instructor_id) {
+        throw new PilotError(409, 'instructor_request_conflict')
+      }
+      return this.detail(run)
+    }
+
+    const saved = this.instructorAssessment(run.id)
+    if (saved.submittedAt !== null) throw new PilotError(409, 'assessment_locked')
+    if (run.phase !== 'driving' && run.phase !== 'after') throw new PilotError(409, 'assessment_not_open')
+    if (input.revision !== saved.revision) throw new PilotError(409, 'stale_revision')
+    const submitted = action === 'submit'
+    if (submitted && answerIds.length !== criteria.length) throw new PilotError(400, 'assessment_incomplete')
+    if (submitted && result === null) throw new PilotError(400, 'result_required')
+
+    const revision = saved.revision + 1
+    this.database.prepare(`
+      INSERT INTO test_drive_instructor_assessments (drive_id, revision, author_id, assessment, submitted_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (drive_id) DO UPDATE SET revision = excluded.revision, author_id = excluded.author_id,
+        assessment = excluded.assessment, submitted_at = excluded.submitted_at
+    `).run(run.id, revision, run.instructor_id, assessment, submitted ? now : null)
+    this.database.prepare(`
+      INSERT INTO test_drive_instructor_requests (drive_id, request_id, request_hash, revision, author_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(run.id, input.requestId, requestHash, revision, run.instructor_id)
     return this.detail(run)
   }
 

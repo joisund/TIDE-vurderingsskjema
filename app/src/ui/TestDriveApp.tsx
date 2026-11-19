@@ -6,7 +6,8 @@ import { testDrivePath } from '../content/test-drive-api.ts'
 import type { TestDriveAdministration, TestDriveDetail, TestDrivePhase, TestDriveWorkspace } from '../content/test-drive-api.ts'
 import { CandidateTestDriveAssessment } from './CandidateTestDriveAssessment.tsx'
 import { CreateTestDriveForm } from './CreateTestDriveForm.tsx'
-import { PilotRequestError, candidateAssessmentStatus, pilotAssessmentWrite, pilotMessage, pilotRequest } from './test-drive-client.ts'
+import { InstructorTestDriveAssessment } from './InstructorTestDriveAssessment.tsx'
+import { PilotRequestError, assessmentStatus, pilotAssessmentWrite, pilotMessage, pilotRequest } from './test-drive-client.ts'
 import './app.css'
 import './test-drive.css'
 
@@ -62,7 +63,7 @@ function Deadline({ value }: { value: string }) {
   return <time dateTime={value}>{dateTime.format(new Date(value))}</time>
 }
 
-function SignIn() {
+function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [email, setEmail] = useState('')
   const [challengeId, setChallengeId] = useState('')
   const [code, setCode] = useState('')
@@ -94,7 +95,7 @@ function SignIn() {
     setProblem('')
     try {
       await pilotRequest('/auth/verify', { email, challengeId, code })
-      window.location.reload()
+      onSignedIn()
     } catch (error) {
       setProblem(pilotMessage(error))
       setBusy(false)
@@ -263,9 +264,9 @@ function CandidateProgress({ detail, onUpdated, onRefresh, onAccessDenied }: {
     <section className="test-drive-assessment" aria-labelledby="candidate-progress">
       <h3 id="candidate-progress" ref={heading} tabIndex={-1}>Kandidatens vurderinger</h3>
       <dl className="details">
-        <div><dt>Førvurdering</dt><dd>{candidateAssessmentStatus(detail.candidateAssessments.before)}</dd></div>
+        <div><dt>Førvurdering</dt><dd>{assessmentStatus(detail.candidateAssessments.before)}</dd></div>
         <div><dt>Ettervurdering</dt><dd>{detail.phase === 'before' || detail.phase === 'driving'
-          ? 'Stengt for registrering' : candidateAssessmentStatus(detail.candidateAssessments.after)}</dd></div>
+          ? 'Stengt for registrering' : assessmentStatus(detail.candidateAssessments.after)}</dd></div>
       </dl>
       {detail.phase === 'before' && (
         <>
@@ -287,9 +288,12 @@ function CandidateProgress({ detail, onUpdated, onRefresh, onAccessDenied }: {
 }
 
 function latestDetail(previous: TestDriveDetail | undefined, incoming: TestDriveDetail) {
-  if (previous && (phaseOrder[previous.phase] > phaseOrder[incoming.phase] ||
+  if (!previous || previous.role !== incoming.role) return incoming
+  if (phaseOrder[previous.phase] > phaseOrder[incoming.phase] ||
     previous.candidateAssessments.before.revision > incoming.candidateAssessments.before.revision ||
-    previous.candidateAssessments.after.revision > incoming.candidateAssessments.after.revision)) return previous
+    previous.candidateAssessments.after.revision > incoming.candidateAssessments.after.revision ||
+    (previous.role === 'instructor' && incoming.role === 'instructor' &&
+      previous.instructorAssessment.revision > incoming.instructorAssessment.revision)) return previous
   return incoming
 }
 
@@ -330,7 +334,7 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
 
   function updateDetail(detail: TestDriveDetail) {
     writeCount.current++
-    setState(current => current.detail ? { detail: latestDetail(current.detail, detail) } : current)
+    setState(current => current.detail?.role === detail.role ? { detail: latestDetail(current.detail, detail) } : current)
   }
 
   const { detail, problem, refreshProblem } = state
@@ -378,7 +382,13 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
               <CandidateTestDriveAssessment detail={detail} part="after" onUpdated={updateDetail} onRefresh={refreshDetail}
                 onAccessDenied={handleAccessDenied} />
             </>
-          ) : <CandidateProgress detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail} onAccessDenied={handleAccessDenied} />}
+          ) : (
+            <>
+              <CandidateProgress detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail} onAccessDenied={handleAccessDenied} />
+              <InstructorTestDriveAssessment detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail}
+                onAccessDenied={handleAccessDenied} />
+            </>
+          )}
         </>
       ) : <p role="status">Åpner testkjøringen …</p>}
     </section>
@@ -393,9 +403,10 @@ export function TestDriveApp() {
   const [view, setView] = useState<View>({ kind: 'loading' })
   const [problem, setProblem] = useState('')
   const [signingOut, setSigningOut] = useState(false)
+  const authChannel = useRef<BroadcastChannel>(null)
   const runId = new URLSearchParams(window.location.search).get('lop')
 
-  usePilotRefresh(signal => {
+  const refreshWorkspace = usePilotRefresh(signal => {
     void pilotRequest<TestDriveWorkspace>('/workspace', undefined, signal).then(workspace => {
       if (!signal.aborted) setView({ kind: 'workspace', workspace })
     }, error => {
@@ -406,6 +417,29 @@ export function TestDriveApp() {
   }, () => {
     if (!runId) setView(current => current.kind === 'workspace' ? { kind: 'loading' } : current)
   })
+
+  useEffect(() => {
+    const channel = new BroadcastChannel('tide-testkjoring-auth')
+    authChannel.current = channel
+    channel.onmessage = event => {
+      if (event.data !== 'session-changed') return
+      flushSync(() => {
+        setView({ kind: 'loading' })
+        setProblem('')
+        setSigningOut(false)
+      })
+      refreshWorkspace.current?.()
+    }
+    return () => {
+      authChannel.current = null
+      channel.close()
+    }
+  }, [refreshWorkspace])
+
+  function confirmedAuthChange() {
+    authChannel.current?.postMessage('session-changed')
+    reload()
+  }
 
   function updateRun(run: TestDriveAdministration) {
     setView(current => {
@@ -423,7 +457,7 @@ export function TestDriveApp() {
     setSigningOut(true)
     try {
       await pilotRequest('/auth/logout', {})
-      reload()
+      confirmedAuthChange()
     } catch (error) {
       setProblem(pilotMessage(error))
       setSigningOut(false)
@@ -447,7 +481,7 @@ export function TestDriveApp() {
         <h1>{view.kind === 'sign-in' ? 'Logg inn til testkjøring' : 'Testkjøring'}</h1>
         {problem && <p role="alert" className="error-panel">{problem}</p>}
         {view.kind === 'loading' && <p role="status">Kontrollerer innloggingen …</p>}
-        {view.kind === 'sign-in' && <SignIn />}
+        {view.kind === 'sign-in' && <SignIn onSignedIn={confirmedAuthChange} />}
         {view.kind === 'unavailable' && (
           <div className="test-drive-section">
             <p role="alert" className="error-panel">Kunne ikke koble til pilotserveren.</p>

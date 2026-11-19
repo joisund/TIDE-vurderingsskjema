@@ -12,7 +12,9 @@ const messages: Record<string, string> = {
   not_found: 'Testkjøringen er ikke tilgjengelig for denne innloggingen.',
   request_conflict: 'Opprettingen er allerede registrert med andre opplysninger. Se oversikten.',
   candidate_request_conflict: 'Denne forespørselen er allerede registrert med andre svar.',
+  instructor_request_conflict: 'Denne forespørselen er allerede registrert med en annen vurdering.',
   assessment_incomplete: 'Svar på alle kriteriene før du leverer.',
+  result_required: 'Velg et samlet resultat før du leverer.',
   assessment_locked: 'Vurderingen er levert og låst.',
   assessment_not_open: 'Denne delen er ikke åpen for registrering.',
   stale_revision: 'En nyere revisjon er lagret på en annen klient.',
@@ -59,7 +61,12 @@ export function pilotMessage(error: unknown) {
   return 'Kunne ikke koble til pilotserveren. Prøv igjen.'
 }
 
-export function candidateAssessmentStatus(assessment: TestDriveAssessmentStatus) {
+export function assessmentStatus(assessment: TestDriveAssessmentStatus) {
   if (assessment.submittedAt !== null) return `Levert og låst · Revisjon ${assessment.revision}`
   return assessment.revision > 0 ? `Lagret utkast · Revisjon ${assessment.revision}` : 'Ingen svar lagret'
+}
+
+export function sameAssessmentFields(first: Partial<Record<string, string>>, second: Partial<Record<string, string>>) {
+  const ids = Object.keys(first)
+  return ids.length === Object.keys(second).length && ids.every(id => first[id] === second[id])
 }

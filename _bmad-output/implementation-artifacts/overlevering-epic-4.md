@@ -14,8 +14,9 @@
 | 4.1 | I review etter kodegjennomgang. Commit `710300fc3cc754f3e0f6c8bd26d3b5190a1c4021`. Oppdatert standardmal med 21 linjer, inkludert 413. Gammel historikk, v6-lagring og PDF er kontrollert. Se [testbevis og triage](spec-4-1-oppdatert-grunnkursmal.md). |
 | 4.2 | I review etter kodegjennomgang. Commit `22fe7b0469fc1819c840f43b3196f69751d2eaf3`. Individuell tildeling følger sjåførreferansen. 83 Node-prøver, 33 nettleserprøver og 21 PDF-kontroller bestod. Se [utviklergrunnlag og testbevis](spec-4-2-tilordne-linje-til-en-sjafor.md). |
 | 4.3 | I review etter kodegjennomgang. Commit `5e1360f2533d2f5507c411be384793be82663c18`. Egen SQLite-lagring og separat pilotinnlogging med lokal fiktiv postkasse. 92 Node-prøver, Playwright i tre motorer og uavhengige HTTP-/TLS-prøver bestod. [Utviklergrunnlag og testbevis](spec-4-3-opprette-testkjoring-med-individuell-tilgang.md). |
-| 4.4 | I review etter kodegjennomgang. Før- og etterdel lagres og leveres separat. 93 Node-prøver og seks pilotprøver i tre nettlesermotorer bestod etter retting. [Utviklergrunnlag og testbevis](spec-4-4-levere-kandidatens-for-og-ettervurdering.md). |
-| 4.5–4.6 | Implementeringsutkast er lagt frem i samme mappe. Endelig kodekart og testbevis kommer fortløpende. |
+| 4.4 | I review etter kodegjennomgang. Commit `2175cd69ac3800cea77e0d5b4fb49f621bec3c7a`. Før- og etterdel lagres og leveres separat. 93 Node-prøver og seks pilotprøver i tre nettlesermotorer bestod etter retting. [Utviklergrunnlag og testbevis](spec-4-4-levere-kandidatens-for-og-ettervurdering.md). |
+| 4.5 | I review etter kodegjennomgang. Instruktøren har egne svar, kommentarer og resultat. Etter rettinger bestod 95 Node-prøver og 12 nettleserprøver i tre motorer. [Utviklergrunnlag og testbevis](spec-4-5-fore-skjermet-instruktorvurdering.md). |
+| 4.6 | Implementeringsutkastet beskriver låst sluttkilde, PDF og prøver. Kodekartet oppdateres etter 4.5. |
 
 ## Fysiske prøver
 

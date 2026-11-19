@@ -1,18 +1,13 @@
 import { useRef, useState } from 'react'
 import type {
-  TestDriveCandidateAction, TestDriveCandidateAnswers, TestDriveCandidateChoice,
+  TestDriveAssessmentAction, TestDriveCandidateAnswers, TestDriveCandidateChoice,
   TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail,
 } from '../content/test-drive-api.ts'
-import { PilotRequestError, candidateAssessmentStatus, pilotAssessmentWrite, pilotMessage } from './test-drive-client.ts'
+import { PilotRequestError, assessmentStatus, pilotAssessmentWrite, pilotMessage, sameAssessmentFields } from './test-drive-client.ts'
 
 const candidateAssessmentName: Record<TestDriveCandidatePart, string> = {
   before: 'Førvurdering',
   after: 'Ettervurdering',
-}
-
-function sameAnswers(first: TestDriveCandidateAnswers, second: TestDriveCandidateAnswers) {
-  const ids = Object.keys(first)
-  return ids.length === Object.keys(second).length && ids.every(id => first[id] === second[id])
 }
 
 type Draft = { revision: number; answers: TestDriveCandidateAnswers }
@@ -27,7 +22,7 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
   const [draft, setDraft] = useState<Draft | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
-  const [request, setRequest] = useState<{ action: TestDriveCandidateAction; payload: TestDriveCandidateWrite } | null>(null)
+  const [request, setRequest] = useState<{ action: TestDriveAssessmentAction; payload: TestDriveCandidateWrite } | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
   const assessment = detail.candidateAssessments[part]
   const { criteria, candidateChoices } = detail.template
@@ -36,13 +31,13 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
   const labelId = `candidate-assessment-${part}`
   const locked = assessment.submittedAt !== null
   const editable = !locked && detail.phase === part
-  const hasChanges = draft !== null && !sameAnswers(draft.answers, assessment.answers)
+  const hasChanges = draft !== null && !sameAssessmentFields(draft.answers, assessment.answers)
   const newerRevision = hasChanges && draft.revision !== assessment.revision
   const answers = draft?.answers ?? assessment.answers
   const remaining = criteria.filter(({ id }) => answers[id] === undefined).length
   const saveStatus = (
     <p className="save-status" role="status">
-      {editable || locked ? candidateAssessmentStatus(assessment) :
+      {editable || locked ? assessmentStatus(assessment) :
         part === 'after' && detail.phase !== 'closed' ? 'Åpnes når instruktøren bekrefter at kjøringen er gjennomført.' :
           'Stengt for registrering.'}
       {hasChanges && ' · Ulagrede svar'}
@@ -50,7 +45,7 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
   )
 
   const confirmed = request && assessment.revision > request.payload.revision &&
-    sameAnswers(request.payload.answers, assessment.answers) && (request.action === 'save' || locked)
+    sameAssessmentFields(request.payload.answers, assessment.answers) && (request.action === 'save' || locked)
   if (!busy && draft && assessment.revision > draft.revision && !hasChanges && (!request || confirmed)) {
     setDraft(null)
     setRequest(null)
@@ -69,7 +64,7 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
     setRequest(null)
   }
 
-  async function write(action: TestDriveCandidateAction) {
+  async function write(action: TestDriveAssessmentAction) {
     if (busy || !editable || (request && request.action !== action)) return
     if (action === 'submit' && remaining > 0) {
       setProblem('Svar på alle kriteriene før du leverer.')

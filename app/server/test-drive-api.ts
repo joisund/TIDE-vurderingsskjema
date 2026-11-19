@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { testDriveApiPath } from '../src/content/test-drive-api.ts'
+import { testDriveApiPath, testDriveCommentLimits } from '../src/content/test-drive-api.ts'
 import type { CreateTestDrive } from '../src/content/test-drive-api.ts'
 import { testDriveOptionalFields } from '../src/content/test-drive.v1.ts'
 import type { TestDriveHeader } from '../src/content/test-drive.v1.ts'
@@ -7,6 +7,11 @@ import { PilotError, pilotSessionLifetime, TestDriveStore } from './test-drive-s
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const jsonLimit = 8192
+
+function instructorJsonLimit(criteriaCount: number) {
+  // En JSON-escape kan bruke opptil seks byte per UTF-16-enhet. Den vanlige grensen dekker øvrige felt.
+  return jsonLimit + 6 * (criteriaCount * testDriveCommentLimits.criterion + testDriveCommentLimits.overall)
+}
 
 function invalid(): never { throw new PilotError(400, 'invalid_input') }
 
@@ -68,18 +73,27 @@ function candidateInput(body: Record<string, unknown>) {
   return { requestId: requestIdentifier(body.requestId), revision, answers: object(body.answers) }
 }
 
-async function readJson(request: IncomingMessage) {
+function instructorInput(body: Record<string, unknown>) {
+  return {
+    ...candidateInput(body),
+    comments: object(body.comments),
+    overallComment: body.overallComment,
+    result: body.result,
+  }
+}
+
+async function readJson(request: IncomingMessage, limit: number) {
   if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
     throw new PilotError(415, 'json_required')
   }
-  if (Number(request.headers['content-length']) > jsonLimit) throw new PilotError(413, 'body_too_large')
+  if (Number(request.headers['content-length']) > limit) throw new PilotError(413, 'body_too_large')
   const chunks: Buffer[] = []
   let size = 0
   let oversized = false
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk)
     size += buffer.length
-    if (size > jsonLimit) oversized = true
+    if (size > limit) oversized = true
     if (!oversized) chunks.push(buffer)
   }
   if (oversized) throw new PilotError(413, 'body_too_large')
@@ -123,9 +137,22 @@ export function createTestDriveApi(store: TestDriveStore, origin: URL, clock = D
       if (method === 'POST' && request.headers.origin !== origin.origin) throw new PilotError(403, 'origin_forbidden')
 
       const path = new URL(request.url ?? '/', origin).pathname.slice(testDriveApiPath.length)
-      const body = method === 'POST' ? await readJson(request) : {}
-      const now = clock()
+      const [, id, command] = /^\/runs\/([^/]+)(?:\/(.*))?$/.exec(path) ?? []
+      const [, instructorAction] = /^instructor\/(save|submit)$/.exec(command ?? '') ?? []
       const token = sessionToken(request, cookieName)
+      if (method === 'POST' && id && uuid.test(id) && (instructorAction === 'save' || instructorAction === 'submit')) {
+        const receivedAt = clock()
+        const initialAccount = store.authenticate(token, receivedAt)
+        const criteriaCount = store.withAssignment(initialAccount.id, id, receivedAt, run => store.template(run).criteria.length, 'instructor')
+        const body = await readJson(request, instructorJsonLimit(criteriaCount))
+        const now = clock()
+        const account = store.authenticate(token, now)
+        return json(response, 200, store.withAssignment(account.id, id, now,
+          run => store.writeInstructorAssessment(run, instructorAction, instructorInput(body), now), 'instructor'))
+      }
+
+      const body = method === 'POST' ? await readJson(request, jsonLimit) : {}
+      const now = clock()
       if (method === 'POST' && path === '/auth/code') {
         const challengeId = store.requestCode(emailAddress(body.email), now)
         return json(response, 202, { challengeId })
@@ -153,7 +180,6 @@ export function createTestDriveApi(store: TestDriveStore, origin: URL, clock = D
         return json(response, result.created ? 201 : 200, result.run)
       }
 
-      const [, id, command] = /^\/runs\/([^/]+)(?:\/(.*))?$/.exec(path) ?? []
       if (id && uuid.test(id)) {
         if (method === 'GET' && command === undefined) {
           return json(response, 200, store.withAssignment(account.id, id, now, run => store.detail(run)))

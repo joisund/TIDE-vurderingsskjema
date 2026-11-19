@@ -19,6 +19,17 @@
 .test-drive-choices input { width: 1rem; height: 1rem; min-width: 0; min-height: 0; margin: 0; flex-shrink: 0; accent-color: var(--primary); }
 .test-drive-assessment-actions { padding-block: 8px; background: var(--surface); border-top: 1px solid var(--tide-sand); }
 .test-drive-answer-list { margin-top: 8px; }
+.test-drive-question .field { margin-top: 8px; }
+.test-drive-assessment textarea {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--surface);
+  resize: vertical;
+}
+.test-drive-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
 .test-drive-footer { padding-top: 16px; margin-top: 22px; border-top: 1px solid var(--tide-sand); }
 .test-drive-footer a { display: inline-flex; min-height: 44px; align-items: center; }
 
@@ -28,5 +39,5 @@
 }
 
 @media (max-width: 480px) {
-  .test-drive input, .test-drive select { font-size: 1rem; }
+  .test-drive input, .test-drive select, .test-drive textarea { font-size: 1rem; }
 }

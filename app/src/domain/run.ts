@@ -99,6 +99,7 @@ export type ErrorCode =
   | 'unsupported_schema' | 'resource_load'
   | 'technical_document_missing' | 'technical_version' | 'technical_points' | 'technical_incomplete' | 'technical_instructor'
   | 'line_document_missing' | 'line_version' | 'line_template' | 'line_history' | 'line_source_missing' | 'line_incomplete' | 'line_instructor'
+  | 'line_assignment_read'
   | 'line_clock' | 'line_revision_limit'
 
 export class AppError<T = CreateRunFields> extends Error {

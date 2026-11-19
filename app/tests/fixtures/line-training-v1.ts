@@ -35,16 +35,16 @@ export function lineTrainingV1Fixture() {
   return { driver, session, document, command, receipt, fingerprint, corruptId: id(9) }
 }
 
-export function seedLineTrainingV1(fixture: ReturnType<typeof lineTrainingV1Fixture>, factory = indexedDB) {
+export function seedLineTrainingV1(fixture: ReturnType<typeof lineTrainingV1Fixture>, factory = indexedDB, schemaVersion = 6) {
   // Funksjonen kjører både i fake-indexeddb og direkte i nettleserens nye testprofil.
   return new Promise<void>((resolve, reject) => {
-    const request = factory.open('tide-kjorevurdering', 6)
+    const request = factory.open('tide-kjorevurdering', schemaVersion)
     request.onupgradeneeded = () => {
       const db = request.result
       const { driver, session, document, command, receipt, fingerprint, corruptId } = fixture
-      const envelope = (data: unknown) => ({ schemaVersion: 6, data })
+      const envelope = (data: unknown) => ({ schemaVersion, data })
       const meta = db.createObjectStore('meta')
-      meta.add({ schemaVersion: 6 }, 'schema')
+      meta.add({ schemaVersion }, 'schema')
       meta.add(envelope(session), 'session')
       db.createObjectStore('runs').createIndex('firstDayId', 'data.firstDay.id', { unique: true })
       db.createObjectStore('drivers').add(envelope(driver), driver.id)

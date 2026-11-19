@@ -32,6 +32,7 @@ const messages: Record<ErrorCode, string> = {
   line_document_missing: 'Linjeoversikten finnes ikke for valgt sjåfør. Åpne dokumentoversikten på nytt.',
   line_version: 'Denne versjonen av linjemalen, dokumentreglene eller PDF-oppsettet støttes ikke.',
   line_template: 'Linjeoversikten avviker fra den tilhørende malen, eller den valgte linjen er utilgjengelig for registrering.',
+  line_assignment_read: 'Linjetildelingene for valgt sjåfør kunne ikke leses. Bekreftet historikk kan fortsatt åpnes.',
   line_history: 'Den bekreftede linjehistorikken er ufullstendig eller samsvarer med feil versjon.',
   line_source_missing: 'Den valgte bekreftede historikkversjonen finnes ikke.',
   line_incomplete: 'De valgte registreringene mangler gyldige opplysninger. Kontroller utvalget på nytt.',

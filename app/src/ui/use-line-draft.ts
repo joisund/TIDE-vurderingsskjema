@@ -188,8 +188,17 @@ export function useLineDraft(initial: LineTrainingView, actor: Actor, applicatio
   }
 
   function restore(latest: LineTrainingView) {
-    if (active.current || (!current.current.readRestriction && current.current.saved.revision === latest.revision)) return
-    if (hasChanges(current.current.changes)) setConflict(new AppError('stale'), latest)
+    const draft = current.current
+    if (!draft.readRestriction && draft.saved.revision === latest.revision) {
+      const { assignedLines, assignmentProblem } = latest
+      if (draft.saved.assignmentProblem !== assignmentProblem || draft.saved.assignedLines.length !== assignedLines.length
+        || assignedLines.some((line, index) => line.id !== draft.saved.assignedLines[index].id)) {
+        publish({ ...draft, saved: { ...draft.saved, assignedLines, assignmentProblem } })
+      }
+      return
+    }
+    if (active.current) return
+    if (hasChanges(draft.changes)) setConflict(new AppError('stale'), latest)
     else publish({ saved: latest, changes: emptyChanges(), writing: false })
   }
 

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
-import { DATABASE_NAME, IndexedDbRunStore } from '../src/adapters/indexeddb/run-store.ts'
+import { DATABASE_NAME, IndexedDbRunStore, SCHEMA_VERSION } from '../src/adapters/indexeddb/run-store.ts'
 import { RunApplication } from '../src/application/run-application.ts'
 import { createLinePdfDownload } from '../src/application/run-pdf.ts'
 import { approvedContent } from '../src/content/approved-content.ts'
-import { extraLines } from '../src/content/line-training.v2.ts'
+import { extraLines, lineTemplateV2 } from '../src/content/line-training.v2.ts'
 import { lineExportSource, validateSavedLine } from '../src/domain/line-training.ts'
 import type { LineEntryChange, LineSelection, LineTraining } from '../src/domain/line-training.ts'
 import { lineTrainingV1Fixture, seedLineTrainingV1 } from './fixtures/line-training-v1.ts'
@@ -56,6 +56,24 @@ async function changeStoredLine(factory: IDBFactory, selection: LineSelection, e
   }
 }
 
+async function writeAssignments(factory: IDBFactory, driverRef: string, ...value: [unknown] | []) {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const open = factory.open(DATABASE_NAME)
+    open.onsuccess = () => resolve(open.result)
+    open.onerror = () => reject(open.error)
+  })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('lineAssignments', 'readwrite')
+      const store = tx.objectStore('lineAssignments')
+      if (value.length) store.put(value[0], driverRef)
+      else store.delete(driverRef)
+      tx.oncomplete = () => resolve()
+      tx.onabort = () => reject(tx.error)
+    })
+  } finally { db.close() }
+}
+
 test('oppretter linjeoversikt uavhengig av teknisk skjema og løp med eksakt mal og aktiv sjåførkobling', async () => {
   const { app, driverId, create, receipt, instructor, read, newTab } = await fixture()
   assert.deepEqual(await app.executeLineTraining(create), receipt)
@@ -84,6 +102,125 @@ test('oppretter linjeoversikt uavhengig av teknisk skjema og løp med eksakt mal
   await app.changeRole('fadder')
   assert.equal((await app.read()).lineDocuments.length, 0)
   await assert.rejects(app.readLineTraining(separate), { code: 'wrong_role' })
+})
+
+test('tildeler én ekstralinje til sjåførreferansen og avviser foreldet rolle, sjåfør, dokument og revisjon', async () => {
+  const { app, instructor, driverId, receipt, read, newTab } = await fixture()
+  const firstDocument = await read()
+  const assign = app.newAssignLineCommand(instructor, firstDocument, 'L10')
+  const tab = newTab()
+  await tab.open()
+  const second = await tab.executeLineTraining(tab.newCreateLineCommand(instructor, driverId))
+  await assert.rejects(app.executeLineTraining(assign), { code: 'stale' })
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [])
+  await tab.selectLineTraining(receipt)
+  const duplicate = await tab.executeCreateDriver(tab.newCreateDriverCommand(instructor, person))
+  const other = await tab.executeLineTraining(tab.newCreateLineCommand(instructor, duplicate.driverId))
+  await assert.rejects(app.executeLineTraining(assign), { code: 'wrong_role' })
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [])
+  await tab.selectDriver(driverId)
+  await tab.selectLineTraining(receipt)
+
+  const { actor: driver } = await tab.changeRole('sjåfør')
+  await assert.rejects(app.executeLineTraining(assign), { code: 'stale' })
+  await assert.rejects(app.executeLineTraining(app.newAssignLineCommand(driver, firstDocument, 'L10')), { code: 'wrong_role' })
+  await tab.changeRole('instruktør')
+  await assert.rejects(app.executeLineTraining(app.newAssignLineCommand(instructor, firstDocument, 'L01')), { code: 'line_template' })
+  await app.executeLineTraining(app.newSaveLineCommand(instructor, firstDocument, { header: { driverName: 'Øvingssjåfør' } }))
+  await assert.rejects(app.executeLineTraining(assign), { code: 'stale' })
+  const updated = await read()
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [])
+
+  const current = app.newAssignLineCommand(instructor, updated, 'L10')
+  const concurrent = tab.newAssignLineCommand(instructor, updated, 'L10')
+  const [one, two] = await Promise.all([app.executeLineTraining(current), tab.executeLineTraining(concurrent)])
+  assert.deepEqual(one, two)
+  assert.deepEqual(await app.executeLineTraining(current), one)
+  assert.deepEqual(await read(), updated)
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [extraLines[0]])
+  assert.deepEqual((await tab.selectLineTraining(second)).lineTraining?.assignedLines, [extraLines[0]])
+  const third = await tab.executeLineTraining(tab.newCreateLineCommand(instructor, driverId))
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [extraLines[0]])
+  assert.deepEqual((await app.readLineTraining(third)).entries, [])
+  await tab.selectLineTraining(second)
+  const { actor: selectedDriver } = await tab.changeRole('sjåfør')
+  const entry = newEntry('L10', date)
+  await app.executeLineTraining(app.newSaveLineCommand(selectedDriver, await app.readLineTraining(second), { changes: [entry] }))
+  await tab.changeRole('instruktør')
+  await tab.selectDriver(duplicate.driverId)
+  await tab.selectLineTraining(other)
+  await assert.rejects(app.executeLineTraining(current), { code: 'wrong_role' })
+  const otherDriver = (await tab.changeRole('sjåfør')).actor
+  await assert.rejects(app.executeLineTraining(app.newSaveLineCommand(otherDriver, await app.readLineTraining(other), {
+    changes: [newEntry('L10', date)],
+  })), { code: 'line_template' })
+  assert.deepEqual((await tab.read()).lineTraining?.assignedLines, [])
+})
+
+test('oppgraderer schema 7 og bevarer både tidligere og frosset tildelingsstatus når ny historikk dannes', async () => {
+  const legacy = lineTrainingV1Fixture()
+  const source = { ...legacy.document.snapshots[0], template: lineTemplateV2, previouslyRecordedLines: [extraLines[0]] }
+  const document = { ...legacy.document, template: lineTemplateV2, snapshots: [source] }
+  const factory = new IDBFactory()
+  await seedLineTrainingV1({ ...legacy, document }, factory, 7)
+  const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, () => crypto.randomUUID())
+  const view = await app.open()
+  assert.deepEqual(view.lineTraining?.assignedLines, [])
+  assert.deepEqual(await app.readLineTraining(legacy.receipt), document)
+  const assignment = app.newAssignLineCommand(view.actor, document, 'L10')
+  await app.executeLineTraining(assignment)
+  assert.deepEqual((await app.read()).lineTraining?.assignedLines, [extraLines[0]])
+  assert.deepEqual(await app.readLineSnapshot(legacy.receipt, 1), source)
+  await app.executeLineTraining(app.newConfirmLineCommand(view.actor, document, [document.entries[1].entryId], 'Astrid Fiktiv'))
+  const secondSource = await app.readLineSnapshot(legacy.receipt, 2)
+  assert.deepEqual(secondSource.assignedLines, [extraLines[0]])
+  assert.deepEqual(secondSource.previouslyRecordedLines, [extraLines[1]])
+  assert.deepEqual(await app.readLineSnapshot(legacy.receipt, 1), source)
+
+  await writeAssignments(factory, legacy.driver.id)
+  await assert.rejects(app.executeLineTraining(assignment), { code: 'line_assignment_read' })
+  const { actor: driver } = await app.changeRole('sjåfør')
+  const before = await app.readLineTraining(legacy.receipt)
+  await assert.rejects(app.executeLineTraining(app.newSaveLineCommand(driver, before, {
+    changes: [newEntry('L10', date)],
+  })), { code: 'line_template' })
+  const standard = newEntry('L01', date)
+  await app.executeLineTraining(app.newSaveLineCommand(driver, before, { changes: [standard] }))
+  await app.changeRole('instruktør')
+  await app.executeLineTraining(app.newConfirmLineCommand(view.actor, await app.readLineTraining(legacy.receipt),
+    [standard.entryId], 'Astrid Fiktiv'))
+  const latest = await app.readLineSnapshot(legacy.receipt)
+  assert.deepEqual(latest.assignedLines, secondSource.assignedLines)
+  assert.deepEqual(latest.previouslyRecordedLines, secondSource.previouslyRecordedLines)
+  assert.deepEqual(await app.readLineSnapshot(legacy.receipt, 2), secondSource)
+})
+
+test('ugyldig tildelingsliste isoleres til sjåføren og sperrer linjeskriving, mens frosset historikk kan leses', async () => {
+  const legacy = lineTrainingV1Fixture()
+  const factory = new IDBFactory()
+  await seedLineTrainingV1(legacy, factory)
+  const app = new RunApplication(new IndexedDbRunStore(factory), approvedContent, () => crypto.randomUUID())
+  const { actor: instructor } = await app.open()
+  const document = await app.readLineTraining(legacy.receipt)
+  for (const value of [undefined, { schemaVersion: SCHEMA_VERSION, data: { lineIds: ['L10'] } },
+    { schemaVersion: SCHEMA_VERSION, data: { driverRef: legacy.driver.id, lineIds: ['L10', 'L10'] } }]) {
+    await writeAssignments(factory, legacy.driver.id, value)
+    const view = await app.read()
+    assert.equal(view.lineTraining?.assignmentProblem, 'line_assignment_read')
+    assert.equal(view.lineProblem, undefined)
+    assert.deepEqual(await app.readLineSnapshot(legacy.receipt, 1, true), legacy.document.snapshots[0])
+    await assert.rejects(app.executeLineTraining(app.newAssignLineCommand(instructor, document, 'L10')), { code: 'line_assignment_read' })
+    await assert.rejects(app.executeLineTraining(app.newConfirmLineCommand(instructor, document, [document.entries[1].entryId], 'Astrid')),
+      { code: 'line_assignment_read' })
+  }
+  const { actor: driver } = await app.changeRole('sjåfør')
+  await assert.rejects(app.executeLineTraining(app.newSaveLineCommand(driver, document, { changes: [newEntry('L01', date)] })),
+    { code: 'line_assignment_read' })
+  await app.changeRole('instruktør')
+  assert.deepEqual((await app.showDrivers()).drivers, [legacy.driver])
+  const other = await app.executeCreateDriver(app.newCreateDriverCommand(instructor, person))
+  await app.executeLineTraining(app.newCreateLineCommand(instructor, other.driverId))
+  assert.equal((await app.read()).lineTraining?.assignmentProblem, undefined)
 })
 
 test('oppgraderer v6 til grunnkursmal v2, beholder innhold og kvitteringer og isolerer en ugyldig oversikt', async () => {

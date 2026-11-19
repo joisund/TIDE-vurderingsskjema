@@ -28,7 +28,7 @@ import type { TechnicalSelection } from '../domain/technical-training.ts'
 import { lineDocumentType } from '../domain/line-training.ts'
 import type { CreateLineTraining } from '../domain/line-training.ts'
 import { LineTrainingForm } from './LineTraining.tsx'
-import type { LineEditorHandle } from './LineTraining.tsx'
+import type { LineEditorHandle, LineWorkspaceNotice } from './LineTraining.tsx'
 
 type DayScreen = 'day' | 'baseline' | 'after' | 'mentor' | 'history' | 'create-day' | 'extend' | 'closure'
 type Screen = 'loading' | 'unavailable' | 'runs' | 'drivers' | 'create-driver' | 'create' | 'context-required'
@@ -220,6 +220,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, downloa
     inFlight.current = true
     setBusy(true)
     setNavigationError('')
+    setDocumentStatus('')
     try {
       await action()
     } finally {
@@ -383,11 +384,13 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, downloa
     })
   }
 
-  function adoptLineState(latest: WorkspaceView) {
+  function adoptLineState(latest: WorkspaceView, notice?: LineWorkspaceNotice) {
     if (latest.actor.id !== view?.actor.id || latest.actor.role !== view?.actor.role) replaceRoleView(latest)
     else setView(latest)
     const next = initialScreen(latest)
     navigate(next === 'runs' && latest.actor.role === 'sjåfør' ? 'drivers' : next)
+    if (notice?.tone === 'status') setDocumentStatus(notice.text)
+    if (notice?.tone === 'error') setNavigationError(notice.text)
   }
 
   function adoptTechnicalState(latest: WorkspaceView) {
@@ -1002,8 +1005,9 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, downloa
         )}
         {lineTraining && view && <div hidden={Boolean(roleRestore)}>
           <LineTrainingForm key={`${view.actor.id}/${lineTraining.documentId}`} ref={lineEditor} initial={lineTraining}
-            actor={view.actor} application={application} navigating={busy} suspended={Boolean(roleRestore)}
-            download={downloadLinePdf} report={report} onStored={adoptLineState} onDriverRole={target => changeRole('sjåfør', target)} />
+            actor={view.actor} driver={technicalDriver} application={application} navigating={busy} suspended={Boolean(roleRestore)}
+            download={downloadLinePdf} report={report} onStored={adoptLineState} onUnverifiedContext={() => setRoleRestore('read-error')}
+            onDriverRole={target => changeRole('sjåfør', target)} />
           <div className="actions"><button type="button" className="button secondary" aria-disabled={busy}
             onClick={showDocumentOverview}>Til dokumentoversikten</button></div>
         </div>}

@@ -3,11 +3,11 @@ import type { Ref } from 'react'
 import type { LineTrainingView, RunApplication, WorkspaceView } from '../application/run-application.ts'
 import type { DownloadLinePdf } from '../application/run-pdf.ts'
 import type { LineTemplateRow } from '../content/line-training.v1.ts'
-import { lineCatalog } from '../content/line-training.v2.ts'
+import { extraLines, lineCatalog } from '../content/line-training.v2.ts'
 import { checkLineSelection, lineEntryErrors, previouslyRecordedLines } from '../domain/line-training.ts'
-import type { ConfirmedLineEntry, ConfirmLineTrainingEntries, LineDraftEntry, LineEntryFields, LineHeader, LineIssue } from '../domain/line-training.ts'
+import type { AssignLineTraining, ConfirmedLineEntry, ConfirmLineTrainingEntries, LineDraftEntry, LineEntryFields, LineHeader, LineIssue, LineReceipt } from '../domain/line-training.ts'
 import { AppError } from '../domain/run.ts'
-import type { Actor } from '../domain/run.ts'
+import type { Actor, DriverReference } from '../domain/run.ts'
 import { Modal } from './AssessmentMatrix.tsx'
 import { CalendarDate, ConfirmationTime } from './CalendarDate.tsx'
 import { PdfDownload } from './RunPdfDownload.tsx'
@@ -21,28 +21,36 @@ export type LineEditorHandle = {
   hasLocalChanges: () => boolean
   clearDialogs: () => void
 }
+export type LineWorkspaceNotice = { tone: 'status' | 'error'; text: string }
 
 type Props = {
   ref: Ref<LineEditorHandle>
   initial: LineTrainingView
   actor: Actor
+  driver?: DriverReference
   application: RunApplication
   navigating: boolean
   suspended: boolean
   download: DownloadLinePdf
   report: (error: unknown) => void
-  onStored: (view: WorkspaceView) => void
+  onStored: (view: WorkspaceView, notice?: LineWorkspaceNotice) => void
+  onUnverifiedContext: () => void
   onDriverRole: (target: string) => void
 }
 
 type Review = {
   document: LineTrainingView; entries: LineDraftEntry[]; trigger: HTMLElement; instructorName: string; error?: string
 }
+type Assignment = {
+  command: AssignLineTraining; line: LineTemplateRow; driver: DriverReference; trigger: HTMLElement
+  receipt?: LineReceipt; error?: string
+}
 
 const headerLabels = { driverName: 'Kandidatnavn', employeeNumber: 'Fiktivt ansattnummer' } satisfies Record<keyof LineHeader, string>
 const headerFields = Object.keys(headerLabels) as (keyof LineHeader)[]
 const catalogById = new Map(lineCatalog.map(line => [line.id, line]))
 const previouslyRecordedLabel = 'Tidligere registrert utenfor grunnkurset'
+const assignedLabel = 'Individuelt tildelt'
 
 function lineProblem(error: unknown) {
   if (error instanceof AppError && (error.code === 'stale' || error.code === 'locked')) {
@@ -98,12 +106,17 @@ function LineOverviewRows({ lines, confirmed, drafts = [] }: {
   })}</ul>
 }
 
-export function LineTrainingForm({ ref, initial, actor, application, navigating, suspended, download, report, onStored, onDriverRole }: Props) {
+export function LineTrainingForm({ ref, initial, actor, driver, application, navigating, suspended, download, report,
+  onStored, onUnverifiedContext, onDriverRole }: Props) {
   const draft = useLineDraft(initial, actor, application, report, suspended)
   const { saved, header, entries, dirty } = draft
   const [selection, setSelection] = useState<string[]>([])
   const [issues, setIssues] = useState<LineIssue[]>([])
   const [review, setReview] = useState<Review>()
+  const [lineToAssign, setLineToAssign] = useState('')
+  const [assignment, setAssignment] = useState<Assignment>()
+  const [assignmentStatus, setAssignmentStatus] = useState('')
+  const [assignmentProblem, setAssignmentProblem] = useState('')
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
   const working = useRef(false)
@@ -111,14 +124,19 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
   const focusField = useRef<string>(undefined)
   const add = useRef<HTMLButtonElement>(null)
   const candidateHeading = useRef<HTMLHeadingElement>(null)
+  const assignedHeading = useRef<HTMLHeadingElement>(null)
   const instructorInput = useRef<HTMLInputElement>(null)
-  const canFill = !draft.conflict && actor.role === 'sjåfør'
-  const canReview = !draft.conflict && actor.role === 'instruktør'
+  const canFill = !draft.conflict && !saved.assignmentProblem && actor.role === 'sjåfør'
+  const canReview = !draft.conflict && !saved.assignmentProblem && actor.role === 'instruktør'
+  const canAssign = canReview && driver?.id === saved.driverRef
   const canEditHeader = canReview && !saved.snapshots.length
   const blocked = busy || navigating
   const drafts = entries.filter(entry => entry.status === 'draft')
   const confirmed = saved.entries.filter(entry => entry.status === 'confirmed')
-  const recordedExtraLines = previouslyRecordedLines(saved.entries)
+  const assignedIds = new Set(saved.assignedLines.map(line => line.id))
+  const assignable = extraLines.filter(line => !assignedIds.has(line.id))
+  const chosenLine = assignable.find(line => line.id === lineToAssign)
+  const recordedExtraLines = previouslyRecordedLines(saved.entries).filter(line => !assignedIds.has(line.id))
   const savedEntries = new Map(saved.entries.map(entry => [entry.entryId, entry]))
   const standardIds = new Set(saved.template.lines.map(line => line.id))
   const firstDriverIssue = issues.find(issue => issue.entryId)
@@ -126,7 +144,14 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
 
   function clearDialogs() {
     setReview(undefined)
+    setAssignment(undefined)
     confirmation.current = undefined
+  }
+
+  function dismissAssignment() {
+    if (working.current) return
+    if (assignment?.receipt) setAssignmentStatus('Linjetildelingen er lagret. Visningen kunne ikke oppdateres.')
+    clearDialogs()
   }
 
   useImperativeHandle(ref, () => ({
@@ -143,9 +168,10 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
       if (latest.revision !== saved.revision) {
         setSelection([])
         setIssues([])
-        if (review) {
+        if (review || (assignment && !assignment.receipt)) {
           clearDialogs()
-          setProblem(lineProblem(new AppError('stale')))
+          if (review) setProblem(lineProblem(new AppError('stale')))
+          if (assignment) setAssignmentProblem('Linjeoversikten er endret. Velg linjen på nytt.')
         }
       }
     },
@@ -236,6 +262,78 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
         if (error instanceof AppError && error.code === 'line_clock') confirmation.current = undefined
         setReview({ ...review, error: lineProblem(error) })
       }
+    } finally {
+      working.current = false
+      setBusy(false)
+    }
+  }
+
+  async function reviewAssignment(trigger: HTMLElement) {
+    if (blocked || working.current || !canAssign || !chosenLine) return
+    working.current = true
+    setBusy(true)
+    setAssignmentStatus('')
+    setAssignmentProblem('')
+    try {
+      if (!await draft.flush()) return
+      const latest = await application.withOpenStorage(() => application.read())
+      if (!matchesLineView(latest, actor, initial)) {
+        onStored(latest, { tone: 'error', text: 'Linjetildelingen ble ikke startet. Det aktive valget er endret.' })
+        return
+      }
+      draft.restore(latest.lineTraining)
+      if (latest.lineTraining.assignmentProblem) return
+      if (latest.lineTraining.assignedLines.some(line => line.id === chosenLine.id)) {
+        setAssignmentStatus(`Linje ${chosenLine.label} er allerede tildelt.`)
+        return
+      }
+      const command = application.newAssignLineCommand(actor, latest.lineTraining, chosenLine.id)
+      setAssignment({ command, line: chosenLine, driver, trigger })
+    } catch (error) {
+      report(error)
+      setAssignmentProblem(`Tildelingen kunne ikke klargjøres. ${explain(error)}`)
+    } finally {
+      working.current = false
+      setBusy(false)
+    }
+  }
+
+  async function confirmAssignment() {
+    if (!assignment || navigating || working.current || (!assignment.receipt && !canAssign)) return
+    working.current = true
+    setBusy(true)
+    let receipt = assignment.receipt
+    try {
+      receipt ??= await application.withOpenStorage(() => application.executeLineTraining(assignment.command))
+      const latest = await application.withOpenStorage(() => application.read())
+      if (!matchesLineView(latest, actor, initial)) {
+        clearDialogs()
+        onStored(latest, { tone: 'status', text: 'Linjetildelingen er lagret.' })
+        return
+      }
+      if (!latest.lineTraining.assignedLines.some(line => line.id === assignment.line.id)) throw new AppError('line_assignment_read')
+      draft.restore(latest.lineTraining)
+      clearDialogs()
+      setLineToAssign('')
+      setAssignmentStatus(`Linje ${assignment.line.label} er tildelt og lagret på denne enheten.`)
+      focusField.current = 'line-assigned'
+    } catch (error) {
+      report(error)
+      if (receipt) {
+        setAssignment({ ...assignment, receipt, error: 'Linjetildelingen er lagret. Visningen kunne ikke oppdateres.' })
+      } else if (error instanceof AppError && ['stale', 'wrong_role', 'command_conflict', 'line_document_missing', 'line_assignment_read'].includes(error.code)) {
+        clearDialogs()
+        try {
+          const latest = await application.withOpenStorage(() => application.read())
+          if (matchesLineView(latest, actor, initial)) {
+            draft.restore(latest.lineTraining)
+            setAssignmentProblem('Linjetildelingen ble ikke lagret. Kontroller linjeoversikten og prøv igjen.')
+          } else onStored(latest, { tone: 'error', text: 'Linjetildelingen ble ikke lagret. Det aktive valget er endret.' })
+        } catch (readError) {
+          report(readError)
+          onUnverifiedContext()
+        }
+      } else setAssignment({ ...assignment, error: `Tildelingen kunne ikke lagres. ${explain(error)}` })
     } finally {
       working.current = false
       setBusy(false)
@@ -341,17 +439,17 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
           const { entryId, lineId, drivenDate } = entry
           const line = catalogById.get(lineId)
           const savedLineId = savedEntries.get(entryId)?.lineId
-          const extraId = savedLineId && !standardIds.has(savedLineId) ? savedLineId : undefined
+          const extraId = savedLineId && !standardIds.has(savedLineId) && !assignedIds.has(savedLineId) ? savedLineId : undefined
           const pendingChange = draft.pendingEntryChanges?.get(entryId)
           const availableExtraId = pendingChange === undefined || pendingChange?.lineId === extraId ? extraId : undefined
-          const selectable = availableExtraId
-            ? lineCatalog.filter(row => standardIds.has(row.id) || row.id === availableExtraId) : saved.template.lines
+          const selectable = lineCatalog.filter(row => standardIds.has(row.id) || assignedIds.has(row.id) || row.id === availableExtraId)
           const errors = lineEntryErrors(entry, lineCatalog, now)
           const description = `Registrering ${index + 1} · ${line ? `Linje ${line.label}` : 'Linje mangler'} · ${drivenDate || 'Kjøredato mangler'}`
           return <li key={entryId} className="line-row" id={`line-entry-${entryId}`} data-entry-id={entryId} tabIndex={-1}>
             <h3>{description}</h3>
             <p className="run-status">Utkast</p>
             {lineId === extraId && <p>{previouslyRecordedLabel}</p>}
+            {assignedIds.has(lineId) && <p>{assignedLabel}</p>}
             {line?.note && <p className="technical-note">{line.note}</p>}
             {canFill && <div className="form-fields">
               <div className="field">
@@ -361,7 +459,7 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
                   onChange={event => setEntryField(entry, 'lineId', event.currentTarget.value)}>
                   <option value="">Velg linje</option>
                   {selectable.map(row => <option key={row.id} value={row.id}>
-                    {row.label}{row.id === extraId && ' · Tidligere registrert'}
+                    {row.label}{row.id === extraId && ' · Tidligere registrert'}{assignedIds.has(row.id) && ' · Individuelt tildelt'}
                   </option>)}
                 </select>
                 {errors.lineId && <p className="field-error" id={`line-code-error-${entryId}`}>{errors.lineId}</p>}
@@ -395,6 +493,28 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
       </ul>
     </section>
     <DownloadHistory saved={saved} draftCount={drafts.length} busy={blocked} download={download} report={report} />
+    {(canAssign || saved.assignmentProblem || saved.assignedLines.length > 0) && <section className="baseline-entry" aria-labelledby="line-assigned">
+      <h2 id="line-assigned" ref={assignedHeading} tabIndex={-1}>Individuelt tildelte linjer</h2>
+      {assignmentStatus && <p className="save-status" role="status">{assignmentStatus}</p>}
+      {assignmentProblem && <p className="error-panel" role="alert">{assignmentProblem}</p>}
+      {saved.assignmentProblem && <p className="error-panel" role="alert">{explain(new AppError(saved.assignmentProblem))}</p>}
+      {saved.assignedLines.length > 0 && <LineOverviewRows lines={saved.assignedLines} confirmed={confirmed} drafts={drafts} />}
+      {canAssign && assignable.length > 0 && <>
+        <div className="field">
+          <label htmlFor="line-assign-choice">Ekstralinje</label>
+          <select id="line-assign-choice" value={chosenLine?.id ?? ''} disabled={blocked}
+            onChange={event => setLineToAssign(event.currentTarget.value)}>
+            <option value="">Velg linje</option>
+            {assignable.map(line => <option key={line.id} value={line.id}>{line.label}</option>)}
+          </select>
+        </div>
+        {chosenLine?.note && <p className="technical-note">{chosenLine.note}</p>}
+        <div className="actions">
+          <button type="button" className="button secondary" aria-disabled={blocked || !chosenLine}
+            onClick={event => { void reviewAssignment(event.currentTarget) }}>Tildel ekstralinje</button>
+        </div>
+      </>}
+    </section>}
     <section className="baseline-entry" aria-labelledby="line-catalog">
       <h2 id="line-catalog">Linjer og bekreftede kjøredatoer{saved.snapshots.length > 0 && ` · Nyeste historikkversjon ${saved.snapshots.length}`}</h2>
       <p>Standardlinjer i grunnkurset</p>
@@ -413,7 +533,7 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
           const line = catalogById.get(entry.lineId)!
           return <li key={entry.entryId} className="line-row">
             <strong>Linje {line.label} · <CalendarDate value={entry.drivenDate} /></strong>
-            {!review.document.template.lines.some(row => row.id === line.id) && <p>{previouslyRecordedLabel}</p>}
+            {!standardIds.has(line.id) && <p>{assignedIds.has(line.id) ? assignedLabel : previouslyRecordedLabel}</p>}
             {line.note && <p>{line.note}</p>}
             <p>Utfylt av {entry.author.name} · Sjåfør</p>
           </li>
@@ -436,6 +556,23 @@ export function LineTrainingForm({ ref, initial, actor, application, navigating,
             onClick={() => { if (!working.current) clearDialogs() }}>Avbryt</button>
         </div>
       </form>
+    </Modal>}
+    {assignment && (canAssign || assignment.receipt) && <Modal title="Bekreft linjetildeling" trigger={assignment.trigger} fallbackFocus={assignedHeading}
+      blocking={busy} dismiss={dismissAssignment}>
+      <p>{assignment.driver.name} · Fiktivt ansattnummer {assignment.driver.employeeNumber}</p>
+      <p className="line-reference">Sjåførreferanse {assignment.driver.id}</p>
+      <p><strong>Linje {assignment.line.label}</strong></p>
+      {assignment.line.note && <p>{assignment.line.note}</p>}
+      <p>Tildelingen åpner for registrering av kjøredato i sjåførens linjedokumenter.</p>
+      {assignment.error && <p className="field-error" role="alert">{assignment.error}</p>}
+      <div className="actions">
+        <button type="button" className="button primary" aria-disabled={busy}
+          onClick={() => { void confirmAssignment() }}>{assignment.receipt
+            ? busy ? 'Kontrollerer …' : 'Kontroller lagringen igjen'
+            : busy ? 'Lagrer …' : 'Bekreft tildeling'}</button>
+        <button type="button" className="button secondary" aria-disabled={busy}
+          onClick={dismissAssignment}>{assignment.receipt ? 'Lukk' : 'Avbryt'}</button>
+      </div>
     </Modal>}
   </div>
 }

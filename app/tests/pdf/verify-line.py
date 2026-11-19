@@ -2,12 +2,11 @@
 
 Valgfri prøve med pdfplumber. Kjør fra app-mappen med en produksjonsbuild:
   $env:TIDE_LINE_PDF_FIXTURE = '1'
-  npm run test:browser -- line-training.spec.ts --project=Chromium -g "frittstående dokument|oppgradert grunnkursmal"
+  npm run test:browser -- line-training.spec.ts --project=Chromium -g "frittstående dokument|oppgradert grunnkursmal|individuell ekstralinje"
   python tests/pdf/verify-line.py <prøvemappe>
   Remove-Item Env:TIDE_LINE_PDF_FIXTURE
 
-Kjør kontrollen én gang per prøvemappe. Begge har linje-kilder.json. Prøven av et nytt
-dokument har standardmal.pdf, og migreringsprøven har v1-original.pdf, v2.pdf og v1-nytt-uttak.pdf.
+Kjør kontrollen én gang per prøvemappe med linje-kilder.json.
 Vanlige nettleserprøver krever ingen Python-pakker.
 """
 
@@ -79,8 +78,12 @@ def verify_pdf(path, source, times):
     standard = CATALOG if template["version"] == 1 else [row for row in CATALOG if row[1] not in EXTRA_IDS]
     recorded = set() if template["version"] == 1 else EXTRA_IDS & {entry["lineId"] for entry in source["entries"]}
     extra = source.get("previouslyRecordedLines", [])
+    assigned = source.get("assignedLines", [])
+    assigned_ids = {line["id"] for line in assigned}
+    assert assigned_ids <= recorded
     assert [(line["label"], line["id"]) for line in template["lines"]] == standard
-    assert [(line["label"], line["id"]) for line in extra] == [row for row in CATALOG if row[1] in recorded]
+    assert [(line["label"], line["id"]) for line in extra] == [row for row in CATALOG if row[1] in recorded - assigned_ids]
+    assert [(line["label"], line["id"]) for line in assigned] == [row for row in CATALOG if row[1] in assigned_ids]
     assert [match.groups() for match in headings] == [row for row in CATALOG if row in standard or row[1] in recorded]
     header = source["header"]
     expected_summary = "\n".join([
@@ -93,14 +96,18 @@ def verify_pdf(path, source, times):
         f"Mal {template['id']} v{template['version']} · Regler v{source['ruleVersion']} · PDF v{source['pdfLayoutVersion']}",
     ])
     assert compact(body[:headings[0].start()]) == compact(expected_summary), path
-    lines = sorted(template["lines"] + extra, key=lambda line: line["id"])
+    lines = sorted(template["lines"] + extra + assigned, key=lambda line: line["id"])
     for index, (line, heading) in enumerate(zip(lines, headings, strict=True)):
         end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
         rows = sorted((entry for entry in source["entries"] if entry["lineId"] == line["id"]), key=lambda entry: entry["drivenDate"])
         note = NOTE if line["id"] == "L10" else ""
         assert line.get("note", "") == note
         assert all(entry["author"]["driverRef"] == source["driverRef"] for entry in rows)
-        marker = "Tidligere registrert utenfor grunnkurset" if line["id"] in recorded else ""
+        marker = ""
+        if line["id"] in assigned_ids:
+            marker = "Individuelt tildelt"
+        elif line["id"] in recorded:
+            marker = "Tidligere registrert utenfor grunnkurset"
         expected = note + marker + ("\n".join(entry_text(entry, line, times) for entry in rows) or "Ikke dokumentert i denne versjonen")
         actual = body[heading.end():end]
         assert compact(actual) == compact(expected), (path, line["id"], actual, expected)
@@ -138,10 +145,27 @@ def verify_standard(folder, fixture):
     verify_pdf(folder / "standardmal.pdf", latest, fixture["times"])
 
 
+def verify_assignment(folder, fixture):
+    early = fixture["firstSource"]
+    archived, latest = fixture["finalDocument"]["snapshots"]
+    assert archived == early
+    assert not archived.get("assignedLines")
+    assert [line["id"] for line in latest["assignedLines"]] == ["L10"]
+    assert latest["entries"][:-1] == early["entries"]
+    assert latest["entries"][-1]["drivenDate"] == "2025-04-15"
+    times = fixture["times"]
+    original = verify_pdf(folder / "før-tildeling.pdf", early, times)
+    renewed = verify_pdf(folder / "tidligere-versjon.pdf", archived, times)
+    assert original == renewed
+    verify_pdf(folder / "med-tildeling.pdf", latest, times)
+
+
 def verify(folder):
     fixture = json.loads((folder / "linje-kilder.json").read_text(encoding="utf-8"))
     if "firstDocument" in fixture:
         verify_migration(folder, fixture)
+    elif "firstSource" in fixture:
+        verify_assignment(folder, fixture)
     else:
         verify_standard(folder, fixture)
 

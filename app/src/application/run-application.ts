@@ -30,7 +30,8 @@ import {
   checkTechnicalTraining, technicalDocumentType, technicalExportSource, validateTechnicalCommand,
 } from '../domain/technical-training.ts'
 import { lineDocumentType, lineExportSource, validateLineCommand } from '../domain/line-training.ts'
-import type { ConfirmLineTrainingEntries, CreateLineTraining, LineCommand, LineSelection, LineTraining, SaveLineTraining } from '../domain/line-training.ts'
+import type { AssignLineTraining, ConfirmLineTrainingEntries, CreateLineTraining, LineCommand, LineSelection, LineTraining, SaveLineTraining } from '../domain/line-training.ts'
+import { extraLines } from '../content/line-training.v2.ts'
 import type {
   ConfirmTechnicalTraining, CreateTechnicalTraining, SaveTechnicalTraining, TechnicalCommand, TechnicalCreateFields, TechnicalPoint, TechnicalSelection,
 } from '../domain/technical-training.ts'
@@ -158,7 +159,11 @@ function toView(state: WorkspaceState) {
     },
     lineDocuments: state.lineDocuments,
     lineProblem: state.lineProblem,
-    lineTraining: state.lineTraining && { ...state.lineTraining, driverActorId: state.technicalDriverActorId },
+    lineTraining: state.lineTraining && {
+      ...state.lineTraining, driverActorId: state.technicalDriverActorId,
+      assignedLines: extraLines.filter(line => state.lineAssignments.includes(line.id)),
+      assignmentProblem: state.lineAssignmentProblem,
+    },
     selected: run && day && plan && {
       ...summary(run),
       ...historyDay(run, day, role, Boolean(closure)),
@@ -629,6 +634,15 @@ export class RunApplication {
       kind: 'confirm-line-training-entries', documentType: document.documentType, documentId: document.documentId,
       commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision,
       payload: { entryIds: [...entryIds], instructorName, confirmedAt: new Date().toISOString() },
+    }
+  }
+
+  newAssignLineCommand(actor: Actor, document: Pick<LineTraining, keyof LineSelection | 'driverRef' | 'revision'>,
+    lineId: string): AssignLineTraining {
+    return {
+      kind: 'assign-line-training', documentType: document.documentType, documentId: document.documentId,
+      commandId: this.#newId(), actor: { ...actor }, driverRef: document.driverRef, expectedRevision: document.revision,
+      payload: { lineId },
     }
   }
 

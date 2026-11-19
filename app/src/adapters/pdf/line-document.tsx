@@ -87,6 +87,7 @@ function composePages(source: LineTrainingSnapshot, lines: LineTemplateRow[]) {
       ...textRows(`Linje ${line.label} · ${line.id}`, fontSize, 700),
       ...(line.note ? textRows(line.note, fontSize, 700) : []),
       ...(source.previouslyRecordedLines?.includes(line) ? textRows('Tidligere registrert utenfor grunnkurset') : []),
+      ...(source.assignedLines?.includes(line) ? textRows('Individuelt tildelt') : []),
     ]
     const records = dated.map(entry => [
       ...textRows(`Linje ${line.label} · Kjøredato ${dateText(entry.drivenDate)} · ${entry.drivenDate}`, fontSize, 700),
@@ -108,8 +109,9 @@ function composePages(source: LineTrainingSnapshot, lines: LineTemplateRow[]) {
 
 export function lineDocument({ source, logo }: { source: LineTrainingSnapshot; logo: string }) {
   const { header, template, entries } = source
-  const lines = source.previouslyRecordedLines?.length
-    ? [...template.lines, ...source.previouslyRecordedLines].sort((a, b) => a.id.localeCompare(b.id))
+  const extra = [...(source.previouslyRecordedLines ?? []), ...(source.assignedLines ?? [])]
+  const lines = extra.length
+    ? [...template.lines, ...extra].sort((a, b) => a.id.localeCompare(b.id))
     : template.lines
   assertGlyphs([header.driverName, header.employeeNumber, ...lines.flatMap(line => [line.label, line.note ?? '']),
     ...entries.flatMap(entry => [entry.author.name, entry.confirmation.actor.name])])

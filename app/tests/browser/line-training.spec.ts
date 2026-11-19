@@ -57,8 +57,8 @@ async function expectPortraitA4(file: Download) {
   }
 }
 
-async function readLine(page: Page) {
-  return page.evaluate(async () => {
+async function readLine(page: Page, documentId?: string) {
+  return page.evaluate(async documentId => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('tide-kjorevurdering')
       request.onsuccess = () => resolve(request.result)
@@ -67,12 +67,17 @@ async function readLine(page: Page) {
     try {
       return await new Promise<LineTraining>((resolve, reject) => {
         const tx = db.transaction('lineDocuments')
-        const request = tx.objectStore('lineDocuments').getAll()
-        tx.oncomplete = () => resolve(request.result[0].data)
+        const store = tx.objectStore('lineDocuments')
+        const request = documentId ? store.get(documentId) : store.getAll()
+        tx.oncomplete = () => {
+          const record = documentId ? request.result : request.result[0]
+          if (record) resolve(record.data)
+          else reject(new Error(`Linjedokumentet mangler${documentId ? ` (${documentId})` : ''}.`))
+        }
         tx.onabort = () => reject(tx.error)
       })
     } finally { db.close() }
-  })
+  }, documentId)
 }
 
 function linePdfTimes(document: LineTraining) {
@@ -127,6 +132,207 @@ async function abortLineSaves(page: Page, attempts = 1) {
     }
   }, attempts)
 }
+
+test('individuell ekstralinje gjelder samme sjåfør i flere dokumenter og fryses først med bekreftet kjøring', async ({ page }, info) => {
+  await page.setViewportSize({ width: 320, height: 630 })
+  await lineDocument(page)
+  const firstDocument = await readLine(page)
+  const overview = () => button(page, 'Til dokumentoversikten').click()
+  const open = (id: string) => page.getByRole('button', { name: /^Åpne linjeopplæring/ }).filter({ hasText: id }).click()
+  const selectDriver = (employeeNumber: string) => page.getByRole('button', { name: new RegExp(`Åse Øvelø Ansattnummer ${employeeNumber} ·`) }).click()
+  const download = () => Promise.all([page.waitForEvent('download'), button(page, 'Last ned bekreftet linjeopplæring').click()])
+
+  await actor(page, 'sjåfør')
+  await addEntry(page, 'L01', '2025-04-13')
+  await actor(page, 'instruktør')
+  await entries(page).first().getByRole('checkbox').check()
+  await confirm(page, 'Øyvind Fiktiv')
+  const [early] = await download()
+  const firstSource = (await readLine(page, firstDocument.documentId)).snapshots[0]
+  await overview()
+  await button(page, 'Ny linjeopplæring').click()
+  const documentReference = page.locator('p.line-reference').filter({ hasText: /^Dokumentreferanse / })
+  await expect(documentReference).toBeVisible()
+  const secondId = (await documentReference.innerText()).replace('Dokumentreferanse ', '')
+  expect(secondId).not.toBe(firstDocument.documentId)
+  await overview()
+  await button(page, 'Opprett sjåfør').click()
+  await page.getByLabel('Sjåførnavn').fill('Åse Øvelø')
+  await page.getByLabel('Ansattnummer', { exact: true }).fill('DEMO-ANNEN')
+  await button(page, 'Opprett ny registrering').click()
+  await button(page, 'Ny linjeopplæring').click()
+  await expect(documentReference).toBeVisible()
+  const otherId = (await documentReference.innerText()).replace('Dokumentreferanse ', '')
+  await overview()
+  await selectDriver('DEMO-LINE')
+  await open(firstDocument.documentId)
+
+  const choose = async (lineId: string) => {
+    await page.getByLabel('Ekstralinje').selectOption(lineId)
+    await button(page, 'Tildel ekstralinje').click()
+    const dialog = page.getByRole('dialog', { name: 'Bekreft linjetildeling' })
+    await expect(dialog).toBeVisible()
+    return dialog
+  }
+  const dialog = await choose('L10')
+  await expect(dialog.getByRole('heading')).toBeFocused()
+  expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0)
+  await expect(dialog).toContainText('Åse Øvelø · Fiktivt ansattnummer DEMO-LINE')
+  await expect(dialog).toContainText(`Sjåførreferanse ${firstDocument.driverRef}`)
+  await expect(dialog).toContainText('Linje 30')
+  await expect(dialog).toContainText('Kjøres med leddbuss. Egen opplæring')
+  await dialog.getByRole('button', { name: 'Avbryt' }).click()
+  await expect(button(page, 'Tildel ekstralinje')).toBeFocused()
+  await expect(page.locator('[data-line-id="L10"]')).toHaveCount(0)
+
+  await choose('L10')
+  await page.evaluate(() => {
+    const originalPut = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = originalPut.apply(this, args)
+      if (this.name === 'lineAssignments') {
+        IDBObjectStore.prototype.put = originalPut
+        request.addEventListener('success', () => this.transaction.abort(), { once: true })
+      }
+      return request
+    }
+  })
+  const submit = dialog.getByRole('button', { name: 'Bekreft tildeling' })
+  await submit.click()
+  await expect(dialog.getByRole('alert')).toContainText('Tildelingen kunne ikke lagres')
+  await expect(page.locator('[data-line-id="L10"]')).toHaveCount(0)
+  await submit.evaluate(element => { element.click(); element.click() })
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByText('Linje 30 er tildelt og lagret på denne enheten.')).toBeVisible()
+  const assigned = page.getByRole('region', { name: 'Individuelt tildelte linjer' })
+  const assigned30 = assigned.locator('[data-line-id="L10"]')
+  await expect(assigned30).toContainText('Ingen bekreftet kjøredato')
+  await expect(assigned30).toContainText('Kjøres med leddbuss. Egen opplæring')
+  await expect(page.getByLabel('Ekstralinje').locator('option[value="L10"]')).toHaveCount(0)
+  await (await choose('L22')).getByRole('button', { name: 'Bekreft tildeling' }).click()
+  await expect(assigned.locator('[data-line-id]')).toHaveCount(2)
+  expect((await readLine(page, firstDocument.documentId)).snapshots).toEqual([firstSource])
+
+  await overview()
+  await open(secondId)
+  await expect(assigned30).toContainText('Kjøres med leddbuss. Egen opplæring')
+  await page.reload()
+  await expect(assigned30).toContainText('Ingen bekreftet kjøredato')
+  await overview()
+  await open(firstDocument.documentId)
+  await actor(page, 'sjåfør')
+  await expect(page.getByLabel('Ekstralinje')).toHaveCount(0)
+  await addEntry(page, 'L10', '2025-04-15')
+  await actor(page, 'instruktør')
+  await entries(page).first().getByRole('checkbox').check()
+  await confirm(page, 'Astrid Fiktiv')
+  await expect(assigned30).toContainText('15.04.2025')
+  await expect(assigned30).toContainText('Astrid Fiktiv')
+  const [latest] = await download()
+  await page.getByLabel('Bekreftet historikkversjon').selectOption('1')
+  const [archived] = await download()
+  const finalDocument = await readLine(page, firstDocument.documentId)
+  expect(finalDocument.snapshots[0]).toEqual(firstSource)
+  expect(finalDocument.snapshots[1].assignedLines?.map(line => line.id)).toEqual(['L10'])
+  for (const file of [early, latest, archived]) await expectPortraitA4(file)
+  if (process.env.TIDE_LINE_PDF_FIXTURE === '1') {
+    await early.saveAs(info.outputPath('før-tildeling.pdf'))
+    await latest.saveAs(info.outputPath('med-tildeling.pdf'))
+    await archived.saveAs(info.outputPath('tidligere-versjon.pdf'))
+    await writeFile(info.outputPath('linje-kilder.json'), JSON.stringify({ firstSource, finalDocument, times: linePdfTimes(finalDocument) }, null, 2), 'utf8')
+  }
+
+  await overview()
+  await selectDriver('DEMO-ANNEN')
+  await open(otherId)
+  await expect(page.locator('[data-line-id]')).toHaveCount(21)
+  await actor(page, 'sjåfør')
+  await button(page, 'Legg til registrering').click()
+  await expect(entries(page).first().locator('option[value="L10"]')).toHaveCount(0)
+})
+
+test('gjenlesing av en tildeling på samme dokumentrevisjon bevarer ulagret kjøredato', async ({ page, context }) => {
+  await lineDocument(page)
+  await actor(page, 'sjåfør')
+  await addEntry(page, 'L01', '')
+  await expect(page.getByText('Lagret på denne enheten', { exact: true })).toBeVisible()
+  const before = await readLine(page)
+  await page.clock.install()
+  await page.clock.pauseAt(new Date(Date.now() + 500))
+  const dateField = entries(page).first().getByLabel(/^Kjøredato ·/)
+  await dateField.fill('2025-04-15')
+  await expect(page.getByText('Endringer er ikke lagret', { exact: true })).toBeVisible()
+
+  const tab = await context.newPage()
+  await tab.goto('/')
+  await actor(tab, 'instruktør')
+  await tab.getByLabel('Ekstralinje').selectOption('L25')
+  await button(tab, 'Tildel ekstralinje').click()
+  await button(tab, 'Bekreft tildeling').click()
+  await expect(tab.getByText('Linje 450 er tildelt og lagret på denne enheten.')).toBeVisible()
+  await actor(tab, 'sjåfør')
+  await expect(button(tab, 'Legg til registrering')).toBeVisible()
+  await tab.close()
+  await page.bringToFront()
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+
+  await expect(page.locator('[data-line-id="L25"]')).toContainText('Ingen bekreftet kjøredato')
+  await expect(dateField).toHaveValue('2025-04-15')
+  expect((await readLine(page)).revision).toBe(before.revision)
+  await page.clock.resume()
+  await expect(page.getByText('Lagret på denne enheten', { exact: true })).toBeVisible()
+  expect((await readLine(page)).entries[0].drivenDate).toBe('2025-04-15')
+})
+
+test('tildelingen kvitteres etter skrivecommit og nytt forsøk bare leser det aktive valget', async ({ page }) => {
+  await lineDocument(page)
+  await page.getByLabel('Ekstralinje').selectOption('L10')
+  await button(page, 'Tildel ekstralinje').click()
+  const dialog = page.getByRole('dialog', { name: 'Bekreft linjetildeling' })
+  await expect(dialog).toBeVisible()
+  await page.evaluate(() => {
+    const transaction = IDBDatabase.prototype.transaction
+    let committedAttempt = false
+    let interruptedRead = false
+    IDBDatabase.prototype.transaction = function (stores, mode, options) {
+      if (Array.isArray(stores) && stores.includes('lineAssignments')) {
+        if (mode === 'readwrite' && stores.includes('commands')) {
+          if (committedAttempt) throw new DOMException('Uventet ny skriving', 'InvalidStateError')
+          committedAttempt = true
+        } else if (mode === 'readonly' && committedAttempt && !interruptedRead) {
+          interruptedRead = true
+          throw new DOMException('Injisert lesefeil etter lagring', 'InvalidStateError')
+        }
+      }
+      return transaction.call(this, stores, mode, options)
+    }
+  })
+  await button(page, 'Bekreft tildeling').click()
+  await expect(dialog.getByRole('alert')).toHaveText('Linjetildelingen er lagret. Visningen kunne ikke oppdateres.')
+  await expect(button(page, 'Bekreft tildeling')).toHaveCount(0)
+  await changeStorage(page, 'unselect')
+  await button(page, 'Kontroller lagringen igjen').click()
+  await expect(page.getByRole('heading', { name: 'Instruktøroversikt' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Linjetildelingen er lagret.' })).toBeVisible()
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('button', { name: /^Åpne linjeopplæring/ }).click()
+  await expect(page.locator('[data-line-id="L10"]')).toContainText('Ingen bekreftet kjøredato')
+})
+
+test('foreldet tildelingsdialog åpner det aktive valget etter avvist skriving', async ({ page }) => {
+  await lineDocument(page)
+  await page.getByLabel('Ekstralinje').selectOption('L10')
+  await button(page, 'Tildel ekstralinje').click()
+  await expect(page.getByRole('dialog', { name: 'Bekreft linjetildeling' })).toBeVisible()
+  await changeStorage(page, 'unselect')
+  await button(page, 'Bekreft tildeling').click()
+  await expect(page.getByRole('heading', { name: 'Instruktøroversikt' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveText('Linjetildelingen ble ikke lagret. Det aktive valget er endret.')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.getByRole('button', { name: /^Åpne linjeopplæring/ }).click()
+  await expect(page.getByLabel('Ekstralinje')).toBeVisible()
+  await expect(page.locator('[data-line-id="L10"]')).toHaveCount(0)
+})
 
 test('sjåfør fører en linje i frittstående dokument, instruktør låser et utvalg og begge laster bekreftet historikk', async ({ page }, info) => {
   await page.setViewportSize({ width: 320, height: 630 })

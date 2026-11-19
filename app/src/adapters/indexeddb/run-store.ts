@@ -26,15 +26,17 @@ import type { TechnicalCommand, TechnicalReadProblem, TechnicalReceipt, Technica
 import { applyLineCommand, createLineTraining, lineDocumentType, lineSummary, upgradeLineTraining, validateLineCommand } from '../../domain/line-training.ts'
 import type { LineCommand, LineReadProblem, LineReceipt, LineSelection, LineTraining } from '../../domain/line-training.ts'
 import type { ErrorCode } from '../../domain/run.ts'
+import { isExtraLineId } from '../../content/line-training.v2.ts'
 
 export const DATABASE_NAME = 'tide-kjorevurdering'
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 const META = 'meta'
 const RUNS = 'runs'
 const DRIVERS = 'drivers'
 const TECHNICAL_DOCUMENTS = 'technicalDocuments'
 const LINE_DOCUMENTS = 'lineDocuments'
+const LINE_ASSIGNMENTS = 'lineAssignments'
 const COMMANDS = 'commands'
 const SCHEMA = 'schema'
 const SESSION = 'session'
@@ -46,6 +48,7 @@ type SavedReceipt<T = RunReceipt> = Envelope<{ fingerprint: string; receipt: T }
 type SavedDriver = Envelope<DriverReference>
 type SavedTechnical = Envelope<TechnicalTraining>
 type SavedLine = Envelope<LineTraining>
+type SavedLineAssignments = Envelope<{ driverRef: string; lineIds: string[] }>
 
 function envelope<T>(data: T): Envelope<T> {
   return { schemaVersion: SCHEMA_VERSION, data }
@@ -180,6 +183,7 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
       }
       if (event.oldVersion < 5) request.result.createObjectStore(TECHNICAL_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
       if (event.oldVersion < 6) request.result.createObjectStore(LINE_DOCUMENTS).createIndex('driverRef', 'data.driverRef')
+      if (event.oldVersion < 8) request.result.createObjectStore(LINE_ASSIGNMENTS)
       if (event.oldVersion === 0) {
         const db = request.result
         db.createObjectStore(META).add({ schemaVersion: SCHEMA_VERSION }, SCHEMA)
@@ -203,6 +207,7 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
 
 type Operations<T> = {
   get<R>(store: string, key: IDBValidKey, next: (value: R | undefined) => void): void
+  lookup<R>(store: string, key: IDBValidKey, next: (entry: { record: R } | undefined) => void): void
   all<R>(store: string, next: (value: R[]) => void): void
   indexed<R>(store: string, index: string, key: IDBValidKey, next: (entries: [IDBValidKey, R][]) => void): void
   entries<R>(store: string, next: (entries: [IDBValidKey, R][]) => void): void
@@ -258,6 +263,9 @@ function runTransaction<T>(
     const operations: Operations<T> = {
       get: <R>(store: string, key: IDBValidKey, next: (value: R | undefined) => void) => {
         getResult(tx.objectStore(store).get(key), next)
+      },
+      lookup: <R>(store: string, key: IDBValidKey, next: (entry: { record: R } | undefined) => void) => {
+        getResult(tx.objectStore(store).openCursor(key), cursor => next(cursor ? { record: cursor.value as R } : undefined))
       },
       all: <R>(store: string, next: (value: R[]) => void) => {
         getResult(tx.objectStore(store).getAll(), next)
@@ -363,6 +371,20 @@ function readLine(record: SavedLine, documentId: string) {
   return document
 }
 
+function getLineAssignments<T>(operations: Operations<T>, driverRef: string, next: (lineIds: string[] | undefined) => void) {
+  operations.lookup<SavedLineAssignments>(LINE_ASSIGNMENTS, driverKey(driverRef), entry => {
+    if (!entry) return next([])
+    const { record } = entry
+    const lineIds = record?.data?.lineIds
+    if (record?.schemaVersion !== SCHEMA_VERSION || record.data?.driverRef !== driverRef
+      || !Array.isArray(lineIds) || !lineIds.length
+      || !Array.from(lineIds).every((id, index) => isExtraLineId(id) && (index === 0 || id > lineIds[index - 1]))) {
+      return next(undefined)
+    }
+    next(lineIds)
+  })
+}
+
 function listDocuments<D, S, P extends DocumentSelection & { error: ErrorCode }>(
   records: [IDBValidKey, Envelope<D>][], active: DocumentSelection | undefined, type: P['documentType'], missing: ErrorCode,
   read: (record: Envelope<D>, id: string) => D, summarize: (document: D) => S,
@@ -404,7 +426,8 @@ function workspace(operations: Operations<WorkspaceState>, session: SavedSession
       const driverActor = session.actors.sjåfør
       const { document, driverId, role } = session
       const canView = driverId !== undefined && canReadTechnical(role, driverId, driverId)
-      function finish(technicalRecords: [IDBValidKey, SavedTechnical][] = [], lineRecords: [IDBValidKey, SavedLine][] = []) {
+      function finish(technicalRecords: [IDBValidKey, SavedTechnical][] = [], lineRecords: [IDBValidKey, SavedLine][] = [],
+        lineAssignments?: string[]) {
         const active = canView && !selection && isId(document?.documentId) ? document : undefined
         const technical = listDocuments<TechnicalTraining, ReturnType<typeof technicalSummary>, TechnicalReadProblem>(
           technicalRecords, active, technicalDocumentType, 'technical_document_missing', readTechnical,
@@ -418,11 +441,15 @@ function workspace(operations: Operations<WorkspaceState>, session: SavedSession
           runs, drivers, technical: technical.current, technicalProblem: technical.problem,
           technicalDriverActorId: driverActor, technicalDocuments: technical.list,
           lineTraining: line.current, lineProblem: line.problem, lineDocuments: line.list,
+          lineAssignments: lineAssignments ?? [],
+          lineAssignmentProblem: canView && !lineAssignments ? 'line_assignment_read' : undefined,
         })
       }
       if (canView) {
         operations.indexed<SavedTechnical>(TECHNICAL_DOCUMENTS, 'driverRef', driverId, techRecords => {
-          operations.indexed<SavedLine>(LINE_DOCUMENTS, 'driverRef', driverId, lineRecords => finish(techRecords, lineRecords))
+          operations.indexed<SavedLine>(LINE_DOCUMENTS, 'driverRef', driverId, lineRecords => {
+            getLineAssignments(operations, driverId, assignedIds => finish(techRecords, lineRecords, assignedIds))
+          })
         })
       } else finish()
     })
@@ -430,8 +457,8 @@ function workspace(operations: Operations<WorkspaceState>, session: SavedSession
 }
 
 const TECHNICAL = [META, DRIVERS, TECHNICAL_DOCUMENTS]
-const LINE = [META, DRIVERS, LINE_DOCUMENTS]
-const WORKSPACE = [...TECHNICAL, LINE_DOCUMENTS, RUNS]
+const LINE = [META, DRIVERS, LINE_DOCUMENTS, LINE_ASSIGNMENTS]
+const WORKSPACE = [...LINE, TECHNICAL_DOCUMENTS, RUNS]
 
 export class IndexedDbRunStore implements RunStore {
   readonly #factory: IDBFactory | undefined
@@ -841,9 +868,9 @@ export class IndexedDbRunStore implements RunStore {
     validateLineCommand(command)
     return this.#withDatabase([...LINE, COMMANDS], 'readwrite', operations => {
       operations.get<SavedReceipt<LineReceipt>>(COMMANDS, command.commandId, saved => {
-        if (saved) {
-          const previous = check(saved)
-          if (previous.fingerprint !== fingerprint) throw new AppError('command_conflict')
+        const previous = saved && check(saved)
+        if (previous && previous.fingerprint !== fingerprint) throw new AppError('command_conflict')
+        if (previous && command.kind !== 'assign-line-training') {
           operations.finish(previous.receipt)
           return
         }
@@ -861,9 +888,32 @@ export class IndexedDbRunStore implements RunStore {
           if (command.kind !== 'create-line-training') {
             assertDocumentSelection(session, command)
             getDocumentRecord<LineReceipt, LineTraining>(operations, command, session, LINE_DOCUMENTS, lineDocumentType,
-              'line_document_missing', (record, driver) => commit(applyLineCommand(
-                check(record), command, driver, session.actors.sjåfør,
-              )))
+              'line_document_missing', (record, driver) => {
+                getLineAssignments(operations, driver.id, assignedIds => {
+                  if (!assignedIds) throw new AppError('line_assignment_read')
+                  if (command.kind !== 'assign-line-training') {
+                    commit(applyLineCommand(check(record), command, driver, session.actors.sjåfør, assignedIds))
+                    return
+                  }
+                  if (session.role !== 'instruktør') throw new AppError('wrong_role')
+                  if (session.selection || driver.id !== command.driverRef) throw new AppError('stale')
+                  const { documentType, documentId, revision } = readLine(record, command.documentId)
+                  const { lineId } = command.payload
+                  if (previous) {
+                    if (!assignedIds.includes(lineId)) throw new AppError('line_assignment_read')
+                    operations.finish(previous.receipt)
+                    return
+                  }
+                  if (revision !== command.expectedRevision) throw new AppError('stale')
+                  if (!assignedIds.includes(lineId)) {
+                    operations.put(LINE_ASSIGNMENTS, driverKey(driver.id),
+                      envelope({ driverRef: driver.id, lineIds: [...assignedIds, lineId].sort() }))
+                  }
+                  const receipt = { documentType, documentId, revision }
+                  operations.add(COMMANDS, command.commandId, envelope({ fingerprint, receipt }))
+                  operations.finish(receipt)
+                })
+              })
             return
           }
           const { driverRef, documentId, documentType } = command

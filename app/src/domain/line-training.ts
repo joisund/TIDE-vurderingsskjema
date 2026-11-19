@@ -1,6 +1,6 @@
 import { lineTemplateV1 } from '../content/line-training.v1.ts'
 import type { LineTemplate, LineTemplateRow } from '../content/line-training.v1.ts'
-import { extraLines, lineCatalog, lineTemplateV2 } from '../content/line-training.v2.ts'
+import { extraLines, isExtraLineId, lineCatalog, lineTemplateV2 } from '../content/line-training.v2.ts'
 import { AppError, hasText, isCalendarDate, isConfirmationTime, isId, isRole, validateDriverFields } from './run.ts'
 import type { Actor, DriverFields, DriverReference, ErrorCode } from './run.ts'
 
@@ -27,6 +27,7 @@ type LineContent = LineSelection & {
 export type LineTrainingSnapshot = LineContent & {
   sourceVersion: number; confirmedRevision: number; confirmedThrough: string; entries: ConfirmedLineEntry[]
   previouslyRecordedLines?: LineTemplateRow[]
+  assignedLines?: LineTemplateRow[]
 }
 export type LineTraining = LineContent & { revision: number; entries: LineEntry[]; snapshots: LineTrainingSnapshot[] }
 export type LineSummary = LineSelection & LineHeader & { driverRef: string; draftCount: number; confirmedCount: number }
@@ -42,7 +43,8 @@ export type SaveLineTraining = CommandBase & {
 export type ConfirmLineTrainingEntries = CommandBase & {
   kind: 'confirm-line-training-entries'; payload: { entryIds: string[]; instructorName: string; confirmedAt: string }
 }
-export type LineCommand = CreateLineTraining | SaveLineTraining | ConfirmLineTrainingEntries
+export type AssignLineTraining = CommandBase & { kind: 'assign-line-training'; payload: { lineId: string } }
+export type LineCommand = CreateLineTraining | SaveLineTraining | ConfirmLineTrainingEntries | AssignLineTraining
 export type LineReceipt = LineSelection & { revision: number; sourceVersion?: number }
 export type LineIssue = { entryId?: string; field?: keyof LineHeader | keyof LineEntryFields; text: string }
 
@@ -88,6 +90,9 @@ export function validateLineCommand(command: LineCommand) {
   switch (command.kind) {
     case 'create-line-training':
       if (command.expectedRevision !== 0 || Object.keys(payload).length) throw new AppError('invalid_command')
+      return
+    case 'assign-line-training':
+      if (Object.keys(payload).length !== 1 || !isExtraLineId(command.payload.lineId)) throw new AppError('line_template')
       return
     case 'save-line-training':
       if (!isConfirmationTime(command.payload.editedAt)
@@ -199,9 +204,20 @@ export function validateSavedLine(document: LineTraining) {
       || source.confirmedRevision > document.revision || !isConfirmationTime(source.confirmedThrough)
       || (last && isEarlier(source.confirmedThrough, last.confirmedThrough))
       || !Array.isArray(source.entries) || !uniqueIds(source.entries.map(entry => entry?.entryId))) throw new AppError('line_history')
-    if (source.template.version === lineTemplateV1.version ? source.previouslyRecordedLines !== undefined
-      : !sameLineRows(source.previouslyRecordedLines, previouslyRecordedLines(source.entries))) throw new AppError('line_history')
-    const sourceLines = [...source.template.lines, ...(source.previouslyRecordedLines ?? [])]
+    if (source.template.version === lineTemplateV1.version) {
+      if (source.previouslyRecordedLines !== undefined || source.assignedLines !== undefined) throw new AppError('line_history')
+    } else {
+      const recorded = previouslyRecordedLines(source.entries)
+      const assigned = source.assignedLines
+      if (assigned !== undefined && (!Array.isArray(assigned) || !assigned.length
+        || !sameLineRows(assigned, recorded.filter(line => assigned.some(row => row?.id === line.id))))) {
+        throw new AppError('line_history')
+      }
+      const assignedIds = new Set(assigned?.map(line => line.id))
+      if (!sameLineRows(source.previouslyRecordedLines, recorded.filter(line => !assignedIds.has(line.id)))
+        || last?.assignedLines?.some(line => !assignedIds.has(line.id))) throw new AppError('line_history')
+    }
+    const sourceLines = [...source.template.lines, ...(source.previouslyRecordedLines ?? []), ...(source.assignedLines ?? [])]
     if (!source.entries.every(entry => validConfirmedEntry(entry, source, sourceLines))) throw new AppError('line_history')
     const oldEntries = last?.entries ?? []
     const newEntries = source.entries.slice(oldEntries.length)
@@ -259,7 +275,7 @@ export function checkLineSelection(document: LineTraining, entryIds: string[], d
   return issues
 }
 
-function saveLineTraining(document: LineTraining, command: SaveLineTraining, driver: DriverReference): LineTraining {
+function saveLineTraining(document: LineTraining, command: SaveLineTraining, driver: DriverReference, assignedIds: string[]): LineTraining {
   const { header, changes, editedAt } = command.payload
   if ((header && command.actor.role !== 'instruktør') || (changes && command.actor.role !== 'sjåfør')) throw new AppError('wrong_role')
   if (header && document.snapshots.length) throw new AppError('locked')
@@ -274,7 +290,8 @@ function saveLineTraining(document: LineTraining, command: SaveLineTraining, dri
     else {
       if (previous && isEarlier(editedAt, previous.editedAt)) throw new AppError('line_clock')
       const { lineId } = change.fields
-      if (lineId && lineId !== previous?.lineId && !document.template.lines.some(line => line.id === lineId)) {
+      if (lineId && lineId !== previous?.lineId && !assignedIds.includes(lineId)
+        && !document.template.lines.some(line => line.id === lineId)) {
         throw new AppError('line_template')
       }
       entries.set(change.entryId, { ...change.fields, entryId: change.entryId, status: 'draft',
@@ -285,14 +302,14 @@ function saveLineTraining(document: LineTraining, command: SaveLineTraining, dri
 }
 
 export function applyLineCommand(document: LineTraining, command: SaveLineTraining | ConfirmLineTrainingEntries,
-  driver: DriverReference, driverActorId: string): LineTraining {
+  driver: DriverReference, driverActorId: string, assignedIds: string[]): LineTraining {
   document = upgradeLineTraining(document)
   if (document.documentId !== command.documentId || document.driverRef !== command.driverRef || driver.id !== document.driverRef) {
     throw new AppError('line_document_missing')
   }
   if (document.revision !== command.expectedRevision) throw new AppError('stale')
   if (document.revision === Number.MAX_SAFE_INTEGER) throw new AppError('line_revision_limit')
-  if (command.kind === 'save-line-training') return saveLineTraining(document, command, driver)
+  if (command.kind === 'save-line-training') return saveLineTraining(document, command, driver, assignedIds)
   if (command.actor.role !== 'instruktør') throw new AppError('wrong_role')
   const { entryIds, instructorName, confirmedAt } = command.payload
   const selected = new Set(entryIds)
@@ -314,9 +331,14 @@ export function applyLineCommand(document: LineTraining, command: SaveLineTraini
   ]))
   const revision = document.revision + 1
   const entries = [...(previous?.entries ?? []), ...confirmed.values()]
+  const recorded = previouslyRecordedLines(entries)
+  const frozenAssignedIds = new Set([...assignedIds, ...(previous?.assignedLines ?? []).map(line => line.id)])
+  const assignedLines = recorded.filter(line => frozenAssignedIds.has(line.id))
   const snapshot: LineTrainingSnapshot = structuredClone({
     documentType, documentId, driverRef, header, template, ruleVersion, pdfLayoutVersion, sourceVersion,
-    confirmedRevision: revision, confirmedThrough: confirmedAt, entries, previouslyRecordedLines: previouslyRecordedLines(entries),
+    confirmedRevision: revision, confirmedThrough: confirmedAt, entries,
+    previouslyRecordedLines: recorded.filter(line => !frozenAssignedIds.has(line.id)),
+    ...(assignedLines.length && { assignedLines }),
   })
   return { ...document, revision, entries: document.entries.map(entry => confirmed.get(entry.entryId) ?? entry),
     snapshots: [...document.snapshots, snapshot] }

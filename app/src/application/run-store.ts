@@ -26,6 +26,8 @@ export type WorkspaceState = {
   technicalProblem?: TechnicalReadProblem
   technicalDriverActorId: string
   lineDocuments: (LineSummary | LineReadProblem)[]
+  lineAssignments: string[]
+  lineAssignmentProblem?: 'line_assignment_read'
   lineTraining?: LineTraining
   lineProblem?: LineReadProblem
 }

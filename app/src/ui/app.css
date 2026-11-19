@@ -82,6 +82,7 @@ a { color: var(--primary); }
 
 .primary { color: var(--surface); background: var(--primary); }
 .secondary, .run-button { color: var(--primary); background: var(--surface); }
+a.button { display: inline-flex; align-items: center; text-decoration: none; }
 [aria-disabled='true'] { cursor: wait; }
 
 .run-list { list-style: none; padding: 0; margin-block: 16px 0; }

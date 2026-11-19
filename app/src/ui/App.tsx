@@ -26,6 +26,7 @@ import { CreateTechnicalForm, TechnicalTrainingForm } from './TechnicalTraining.
 import type { TechnicalEditorHandle } from './TechnicalTraining.tsx'
 import type { TechnicalSelection } from '../domain/technical-training.ts'
 import { lineDocumentType } from '../domain/line-training.ts'
+import { testDrivePath } from '../content/test-drive-api.ts'
 import type { CreateLineTraining } from '../domain/line-training.ts'
 import { LineTrainingForm } from './LineTraining.tsx'
 import type { LineEditorHandle, LineWorkspaceNotice } from './LineTraining.tsx'
@@ -927,6 +928,7 @@ export function App({ application, downloadRunPdf, downloadTechnicalPdf, downloa
             )}
             {view && <p className="network-status" aria-live="polite">{online ? 'Nett tilkoblet' : 'Uten nett'}</p>}
           </div>
+          {overview && <a className="button secondary test-drive-link" href={testDrivePath}>Testkjøring</a>}
         </div>
       </header>
       <main className="content">

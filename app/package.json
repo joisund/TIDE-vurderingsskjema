@@ -7,10 +7,14 @@
   "packageManager": "npm@11.20.0",
   "scripts": {
     "dev": "vite",
+    "dev:pilot": "vite --mode pilot",
     "typecheck": "tsc -b",
     "build": "npm run typecheck && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "pilot:start": "node server/pilot-server.ts",
+    "pilot:seed": "node server/pilot-admin.ts seed",
+    "pilot:mailbox": "node server/pilot-admin.ts mailbox",
     "test": "node --test tests/*.test.ts",
     "test:browser": "playwright test"
   },

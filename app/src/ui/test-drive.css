@@ -1,0 +1,16 @@
+.test-drive { max-width: 38rem; }
+.test-drive h1 { margin-bottom: 16px; }
+.test-drive-section { display: grid; gap: 12px; margin-block: 20px; }
+.test-drive-section .run-list, .test-drive-section .field-check { margin-block: 0; }
+.test-drive-card { padding: 12px; border: 1px solid var(--ink); border-radius: var(--radius); }
+.test-drive-card h3 { margin-bottom: 2px; }
+.test-drive-card .details { margin-block: 12px; }
+.test-drive-link { text-decoration: none; }
+.test-drive-criteria { margin: 8px 0; padding-inline-start: 24px; }
+.test-drive-criteria li + li { margin-top: 6px; }
+.test-drive-footer { padding-top: 16px; margin-top: 22px; border-top: 1px solid var(--tide-sand); }
+.test-drive-footer a { display: inline-flex; min-height: 44px; align-items: center; }
+
+@media (max-width: 480px) {
+  .test-drive input, .test-drive select { font-size: 1rem; }
+}

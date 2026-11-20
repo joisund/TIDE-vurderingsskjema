@@ -140,6 +140,9 @@ export function createTestDriveApi(store: TestDriveStore, origin: URL, clock = D
       const [, id, command] = /^\/runs\/([^/]+)(?:\/(.*))?$/.exec(path) ?? []
       const [, instructorAction] = /^instructor\/(save|submit)$/.exec(command ?? '') ?? []
       const token = sessionToken(request, cookieName)
+      if (method === 'GET' && command === 'export-source' && id && uuid.test(id)) {
+        return json(response, 200, store.readExportSource(token, id, clock))
+      }
       if (method === 'POST' && id && uuid.test(id) && (instructorAction === 'save' || instructorAction === 'submit')) {
         const receivedAt = clock()
         const initialAccount = store.authenticate(token, receivedAt)
@@ -186,6 +189,12 @@ export function createTestDriveApi(store: TestDriveStore, origin: URL, clock = D
         }
         if (method === 'POST') {
           if (command === 'revoke') return json(response, 200, store.revokeCandidate(account, id, now, origin.origin))
+          if (command === 'close') {
+            return json(response, 200, store.withAssignment(account.id, id, now, run => {
+              if (Object.keys(body).length !== 0) invalid()
+              return store.closeRun(run, now)
+            }, 'instructor'))
+          }
           if (command === 'complete-driving') {
             return json(response, 200, store.withAssignment(account.id, id, now, run => store.completeDriving(run), 'instructor'))
           }

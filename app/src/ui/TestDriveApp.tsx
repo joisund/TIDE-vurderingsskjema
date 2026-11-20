@@ -3,10 +3,11 @@ import type { SubmitEvent } from 'react'
 import { flushSync } from 'react-dom'
 import logo from '../assets/tide-logo-rgb.png'
 import { testDrivePath } from '../content/test-drive-api.ts'
-import type { TestDriveAdministration, TestDriveDetail, TestDrivePhase, TestDriveWorkspace } from '../content/test-drive-api.ts'
+import type { TestDriveAdministration, TestDriveDetail, TestDriveOpenDetail, TestDrivePhase, TestDriveWorkspace } from '../content/test-drive-api.ts'
 import { CandidateTestDriveAssessment } from './CandidateTestDriveAssessment.tsx'
 import { CreateTestDriveForm } from './CreateTestDriveForm.tsx'
 import { InstructorTestDriveAssessment } from './InstructorTestDriveAssessment.tsx'
+import { CloseTestDrive, TestDriveResult } from './TestDriveClosure.tsx'
 import { PilotRequestError, assessmentStatus, pilotAssessmentWrite, pilotMessage, pilotRequest } from './test-drive-client.ts'
 import './app.css'
 import './test-drive.css'
@@ -238,7 +239,7 @@ function Workspace({ workspace, onSessionEnd, onRunChange }: {
 }
 
 function CandidateProgress({ detail, onUpdated, onRefresh, onAccessDenied }: {
-  detail: Extract<TestDriveDetail, { role: 'instructor' }>
+  detail: Extract<TestDriveOpenDetail, { role: 'instructor' }>
   onUpdated: (detail: TestDriveDetail) => void
   onRefresh: () => void
   onAccessDenied: (error: unknown) => boolean
@@ -282,13 +283,15 @@ function CandidateProgress({ detail, onUpdated, onRefresh, onAccessDenied }: {
         </div>
       )}
       {detail.phase === 'after' && <p role="status">Kjøringen er bekreftet gjennomført. Ettervurderingen er åpnet.</p>}
-      {problem && detail.phase !== 'after' && detail.phase !== 'closed' && <p role="alert" className="error-panel">{problem}</p>}
+      {problem && detail.phase !== 'after' && <p role="alert" className="error-panel">{problem}</p>}
     </section>
   )
 }
 
 function latestDetail(previous: TestDriveDetail | undefined, incoming: TestDriveDetail) {
   if (!previous || previous.role !== incoming.role) return incoming
+  if (previous.phase === 'closed') return previous
+  if (incoming.phase === 'closed') return incoming
   if (phaseOrder[previous.phase] > phaseOrder[incoming.phase] ||
     previous.candidateAssessments.before.revision > incoming.candidateAssessments.before.revision ||
     previous.candidateAssessments.after.revision > incoming.candidateAssessments.after.revision ||
@@ -297,10 +300,11 @@ function latestDetail(previous: TestDriveDetail | undefined, incoming: TestDrive
   return incoming
 }
 
-function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void }) {
+function RunDetail({ id, signingOut, onSessionEnd }: { id: string; signingOut: boolean; onSessionEnd: () => void }) {
   const [state, setState] = useState<{ detail?: TestDriveDetail; problem?: string; refreshProblem?: string }>({})
   const writeCount = useRef(0)
   const accessVersion = useRef(0)
+  const focusOnRefresh = useRef(false)
 
   function handleAccessDenied(error: unknown) {
     if (!(error instanceof PilotRequestError) || (error.status !== 401 && error.status !== 404)) return false
@@ -313,10 +317,15 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
   const recheck = usePilotRefresh(signal => {
     const checkingAt = writeCount.current
     const accessAt = accessVersion.current
+    const focusResult = focusOnRefresh.current
+    focusOnRefresh.current = false
     void pilotRequest<TestDriveDetail>(`/runs/${encodeURIComponent(id)}`, undefined, signal).then(detail => {
       if (signal.aborted || accessAt !== accessVersion.current) return
       if (detail.role === 'candidate' && Date.parse(detail.expiresAt) <= Date.now()) {
         setState({ problem: unavailableRun })
+      } else if (focusResult && detail.role === 'candidate' && detail.phase === 'closed') {
+        flushSync(() => setState(current => ({ detail: latestDetail(current.detail, detail) })))
+        document.getElementById('test-drive-result')?.focus()
       } else {
         setState(current => ({ detail: latestDetail(current.detail, detail) }))
       }
@@ -331,6 +340,10 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
   }, () => setState({}))
 
   function refreshDetail() { recheck.current?.() }
+  function refreshCandidateDetail(focusResult?: true) {
+    focusOnRefresh.current = focusResult === true
+    refreshDetail()
+  }
 
   function updateDetail(detail: TestDriveDetail) {
     writeCount.current++
@@ -338,6 +351,10 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
   }
 
   const { detail, problem, refreshProblem } = state
+  const template = detail?.phase === 'closed' ? detail.document.template : detail?.template
+  const header = detail?.phase === 'closed'
+    ? { ...detail.document.header, candidateEmail: detail.document.candidate.email }
+    : detail?.header
   const candidateExpiry = detail?.role === 'candidate' ? Date.parse(detail.expiresAt) : undefined
   useEffect(() => {
     if (candidateExpiry === undefined) return
@@ -364,27 +381,33 @@ function RunDetail({ id, onSessionEnd }: { id: string; onSessionEnd: () => void 
             <div><dt>Din rolle</dt><dd>{detail.role === 'candidate' ? 'Kandidat' : 'Instruktør'}</dd></div>
             <div><dt>Fase</dt><dd>{phaseName[detail.phase]}</dd></div>
             <div><dt>Kandidatens tilgang utløper</dt><dd><Deadline value={detail.expiresAt} /></dd></div>
-            {detail.template.headerFields.map(({ id, label }) => id in detail.header && (
-              <div key={id}><dt>{label}</dt><dd>{detail.header[id as keyof typeof detail.header]}</dd></div>
+            {template?.headerFields.map(({ id, label }) => header && id in header && (
+              <div key={id}><dt>{label}</dt><dd>{header[id as keyof typeof header]}</dd></div>
             ))}
           </dl>
-          <details className="field-check">
+          {detail.phase !== 'closed' && <details className="field-check">
             <summary>Evalueringskriterier</summary>
             <ol className="test-drive-criteria">
               {detail.template.criteria.map(criterion => <li key={criterion.id}>{criterion.label}</li>)}
             </ol>
             <p className="hint">{detail.template.source.collection} {detail.template.source.year}</p>
-          </details>
-          {detail.role === 'candidate' ? (
+          </details>}
+          {detail.phase === 'closed' ? (
+            <TestDriveResult detail={detail} busy={signingOut} onAccessDenied={handleAccessDenied} />
+          ) : detail.role === 'candidate' ? (
             <>
-              <CandidateTestDriveAssessment detail={detail} part="before" onUpdated={updateDetail} onRefresh={refreshDetail}
+              <CandidateTestDriveAssessment detail={detail} part="before" onUpdated={updateDetail} onRefresh={refreshCandidateDetail}
                 onAccessDenied={handleAccessDenied} />
-              <CandidateTestDriveAssessment detail={detail} part="after" onUpdated={updateDetail} onRefresh={refreshDetail}
+              <CandidateTestDriveAssessment detail={detail} part="after" onUpdated={updateDetail} onRefresh={refreshCandidateDetail}
                 onAccessDenied={handleAccessDenied} />
             </>
           ) : (
             <>
               <CandidateProgress detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail} onAccessDenied={handleAccessDenied} />
+              <CloseTestDrive detail={detail} onRefresh={refreshDetail} onAccessDenied={handleAccessDenied} onClosed={updated => {
+                flushSync(() => updateDetail(updated))
+                document.getElementById('test-drive-result')?.focus()
+              }} />
               <InstructorTestDriveAssessment detail={detail} onUpdated={updateDetail} onRefresh={refreshDetail}
                 onAccessDenied={handleAccessDenied} />
             </>
@@ -488,7 +511,7 @@ export function TestDriveApp() {
             <div className="actions"><button type="button" className="button secondary" onClick={reload}>Prøv igjen</button></div>
           </div>
         )}
-        {view.kind === 'workspace' && (runId ? <RunDetail key={view.workspace.person.id} id={runId} onSessionEnd={reload} /> :
+        {view.kind === 'workspace' && (runId ? <RunDetail key={view.workspace.person.id} id={runId} signingOut={signingOut} onSessionEnd={reload} /> :
           <Workspace key={view.workspace.person.id} workspace={view.workspace} onSessionEnd={reload} onRunChange={updateRun} />)}
         <nav className="test-drive-footer" aria-label="Digital kjørevurdering">
           <a href="/">Til digital kjørevurdering</a>

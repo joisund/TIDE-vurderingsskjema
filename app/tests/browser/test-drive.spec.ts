@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
+import { readFile, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import type { APIResponse, Page } from '@playwright/test'
+import type { APIResponse, BrowserContext, Page } from '@playwright/test'
 import { seedPilot } from '../../server/pilot-accounts.ts'
 import { startPilotServer } from '../../server/pilot-server.ts'
 import { TestDriveStore } from '../../server/test-drive-store.ts'
+import type { TestDriveClosedDocument } from '../../src/content/test-drive-api.ts'
 import { testDriveV1 } from '../../src/content/test-drive.v1.ts'
 
 async function signIn(store: TestDriveStore, page: Page, email: string, checkThrottle = false) {
@@ -32,6 +34,279 @@ async function signIn(store: TestDriveStore, page: Page, email: string, checkThr
   await expect(page.getByRole('button', { name: 'Logg ut' })).toBeVisible()
   await expect(page.locator('header')).toContainText(email)
 }
+
+test('avsluttet testkjøring gir samme låste vurderinger og faktiske PDF i separate profiler', async ({ browser }, info) => {
+  test.setTimeout(90_000)
+  const store = new TestDriveStore(info.outputPath('avslutning.sqlite'))
+  let server: ReturnType<typeof startPilotServer> | undefined
+  const contexts: BrowserContext[] = []
+  const releaseHeldResponses: (() => void)[] = []
+  try {
+    seedPilot(store)
+    server = startPilotServer(store, { host: '127.0.0.1', port: 0 })
+    await once(server, 'listening')
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Fant ikke adressen til pilotserveren.')
+    const [serve] = server.listeners('request')
+    server.off('request', serve)
+    let failNextRenderer = false
+    server.on('request', (request, response) => {
+      if (failNextRenderer && /^\/assets\/renderer-.*\.js$/.test(request.url ?? '')) {
+        failNextRenderer = false
+        response.writeHead(503, { 'Cache-Control': 'no-store' }).end()
+        return
+      }
+      serve(request, response)
+    })
+    const origin = `http://127.0.0.1:${address.port}`
+    const now = Date.now()
+    const admin = { id: 'admin-bergen', name: 'Siri Eksempel', email: 'opplaering-bergen@pilot.test' }
+    const candidateEmail = 'kandidat-1@pilot.test'
+    const busName = 'Øvelsesbuss ÆØÅ 🙂'
+    const run = store.createRun(admin, {
+      requestId: randomUUID(), departmentId: 'bergen', candidateName: 'Nora Eksempel', candidateEmail,
+      instructorId: 'instructor-bergen', expiresAt: new Date(now + 60 * 60_000).toISOString(),
+      header: { bus: busName, driveDate: '2026-11-20', knowsArea: 'Nordås og Åsane' },
+    }, now, origin).run
+    const detailUrl = `${origin}/api/testkjoring/runs/${run.id}`
+    const closeUrl = `${detailUrl}/close`
+    const exportUrl = `${detailUrl}/export-source`
+    const rendererUrl = '**/assets/renderer-*.js'
+    const fontUrl = '**/assets/NotoSans-Regular-*'
+    const settings = { hasTouch: true, viewport: { width: 320, height: 740 }, locale: 'nb-NO', timezoneId: 'America/Los_Angeles' }
+    for (let index = 0; index < 3; index++) contexts.push(await browser.newContext(settings))
+    const [candidate, instructor, renewed] = await Promise.all(contexts.map(context => context.newPage()))
+    const closure = instructor.getByRole('region', { name: 'Avslutning' })
+    const closeButton = closure.getByRole('button', { name: 'Avslutt testkjøringen' })
+    const confirm = closure.getByRole('button', { name: 'Bekreft avslutning' })
+    const resultHeading = 'Resultat av testkjøringen'
+    const startLabel = 'Last ned testkjørings-PDF'
+    const retryLabel = 'Prøv å laste ned PDF igjen'
+    const fileName = `testkjoring-${run.id}.pdf`
+    const criterionComment = 'Øv på «sving» og sørg for god flyt. 🙂\nSe også VTL § 3.'
+    const overallLines = Array.from({ length: 145 }, (_, index) =>
+      `Linje ${String(index + 1).padStart(3, '0')} · Æ, Ø og Å. «Jevn kjøring» ved holdeplassen, også i regn.`
+    ).join('\n')
+    const overallComment = `${'\n'.repeat(250)}${overallLines}\r\n${'\t \r\n'.repeat(180)}Langt ord ${'\t'.repeat(300)}${'kjøreøvelse'.repeat(18)}${'\n'.repeat(220)}`
+    const answers = (choices: readonly string[]) => Object.fromEntries(testDriveV1.criteria.map(({ id }, index) => [id, choices[index % choices.length]]))
+
+    async function post(page: Page, action: string, fields = {}) {
+      const response = await page.request.post(`${detailUrl}/${action}`, {
+        headers: { Origin: origin }, data: action === 'complete-driving' ? {} : { requestId: randomUUID(), revision: 0, ...fields },
+      })
+      expect(response.status()).toBe(200)
+    }
+
+    async function refresh(page: Page) {
+      const [response] = await Promise.all([page.waitForResponse(detailUrl), page.evaluate(() => window.dispatchEvent(new Event('focus')))])
+      return response
+    }
+
+    async function holdResponse(page: Page, url: string) {
+      const received = Promise.withResolvers<APIResponse>()
+      const release = Promise.withResolvers<void>()
+      releaseHeldResponses.push(release.resolve)
+      await page.route(url, async route => {
+        const response = await route.fetch()
+        received.resolve(response)
+        await release.promise
+        await route.fulfill({ response }).catch(() => undefined)
+      }, { times: 1 })
+      return { received: received.promise, release: release.resolve }
+    }
+
+    async function download(page: Page, fixture: string, label = startLabel) {
+      const [file] = await Promise.all([page.waitForEvent('download', { timeout: 15_000 }), page.getByRole('button', { name: label }).click()])
+      expect(file.suggestedFilename()).toBe(fileName)
+      const path = await file.path()
+      expect((await readFile(path)).subarray(0, 5).toString()).toBe('%PDF-')
+      if (process.env.TIDE_TEST_DRIVE_PDF_FIXTURE === '1') await file.saveAs(info.outputPath(fixture))
+      await expect(page.getByText('PDF-filen er klar.')).toBeVisible()
+    }
+
+    const rendererRequests: string[] = []
+    for (const page of [candidate, instructor]) page.on('request', request => {
+      if (/\/(?:renderer-|test-drive-document-|NotoSans-)/.test(request.url())) rendererRequests.push(request.url())
+    })
+    await Promise.all([candidate, instructor, renewed].map(page => page.goto(run.invitationUrl)))
+    await Promise.all([signIn(store, candidate, candidateEmail), signIn(store, instructor, 'instruktor-bergen@pilot.test')])
+    await signIn(store, renewed, candidateEmail)
+    await expect(closure.getByRole('listitem')).toHaveText(['Førvurdering', 'Ettervurdering', 'Instruktørvurdering'])
+    await expect(closeButton).toHaveCount(0)
+    expect((await candidate.request.get(exportUrl)).status()).toBe(409)
+
+    await post(candidate, 'candidate/before/submit', { answers: answers(['ok', 'improve']) })
+    await post(instructor, 'complete-driving')
+    await post(instructor, 'instructor/submit', {
+      answers: answers(['fail', 'ok', 'improve']), comments: { 'td-09': criterionComment }, overallComment, result: 'conditional',
+    })
+    await refresh(instructor)
+    await expect(closure.getByRole('listitem')).toHaveText(['Ettervurdering'])
+    await post(candidate, 'candidate/after/submit', { answers: answers(['improve', 'ok']) })
+    await refresh(candidate)
+    const after = candidate.getByRole('region', { name: 'Ettervurdering', exact: true })
+    await expect(after.getByRole('status')).toHaveText('Levert og låst · Revisjon 1')
+    await expect(candidate.getByText(criterionComment)).toHaveCount(0)
+    await expect(candidate.getByRole('button', { name: startLabel })).toHaveCount(0)
+    await closure.getByRole('button', { name: 'Oppdater leveringsstatus' }).click()
+
+    await closeButton.click()
+    await closure.getByRole('button', { name: 'Avbryt' }).click()
+    await expect(closeButton).toBeFocused()
+    expect((await candidate.request.get(exportUrl)).status()).toBe(409)
+    await closeButton.click()
+    await instructor.route(closeUrl, route => route.abort(), { times: 1 })
+    await confirm.click()
+    await expect(closure.getByRole('alert')).toContainText('Kunne ikke avslutte testkjøringen.')
+    expect((await candidate.request.get(exportUrl)).status()).toBe(409)
+
+    await instructor.bringToFront()
+    await refresh(instructor)
+    const stale = await holdResponse(instructor, detailUrl)
+    const pendingRefresh = refresh(instructor)
+    expect((await (await stale.received).json()).phase).toBe('after')
+    const [committed] = await Promise.all([instructor.waitForResponse(closeUrl), confirm.click()])
+    expect(committed.status()).toBe(200)
+    expect(committed.request().postDataJSON()).toEqual({})
+    const { document: frozen } = await committed.json() as { document: TestDriveClosedDocument }
+    await expect(instructor.getByRole('heading', { name: resultHeading })).toBeFocused()
+    stale.release()
+    expect((await (await pendingRefresh).json()).phase).toBe('after')
+    await instructor.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(instructor.getByRole('heading', { name: resultHeading })).toBeFocused()
+    await after.getByRole('button', { name: 'Oppdater status' }).click()
+    await expect(candidate.getByRole('heading', { name: resultHeading })).toBeFocused()
+    const overview = renewed.getByRole('link', { name: 'Til testkjøringsoversikten' })
+    await overview.focus()
+    await refresh(renewed)
+    await expect(renewed.getByRole('heading', { name: resultHeading })).toBeVisible()
+    await expect(overview).toBeFocused()
+    const result = candidate.getByRole('region', { name: resultHeading })
+    await expect(result.getByRole('listitem')).toHaveCount(22)
+    await expect(result.getByText('Med forbehold', { exact: true })).toBeVisible()
+    await expect(result.getByText(criterionComment)).toBeVisible()
+    await expect(candidate.getByText(busName)).toBeVisible()
+    expect(await candidate.evaluate(() => document.documentElement.scrollWidth)).toBe(320)
+    expect(await (await candidate.request.get(exportUrl)).json()).toEqual(frozen)
+    expect(frozen.instructorAssessment.overallComment).toBe(overallComment)
+    expect(frozen.instructorAssessment.comments['td-09']).toBe(criterionComment)
+    const oslo = new Intl.DateTimeFormat('nb-NO', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+      timeZone: 'Europe/Oslo', timeZoneName: 'shortOffset',
+    })
+    for (const page of [candidate, instructor]) {
+      const closedView = page.getByRole('region', { name: resultHeading })
+      const point = closedView.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Punktlighet', exact: true }) })
+      for (const [label, answer] of [['Kandidat før', 'OK'], ['Kandidat etter', 'Kan bli bedre'], ['Instruktør', 'Ikke bestått']]) {
+        const cell = point.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+        await expect(cell.locator('dd')).toHaveText(answer)
+      }
+      const receiptTimes = [frozen.closedAt, frozen.candidateAssessments.before.submittedAt,
+        frozen.candidateAssessments.after.submittedAt, frozen.instructorAssessment.submittedAt]
+      await expect(closedView.locator('time')).toHaveText(receiptTimes.map(value => oslo.format(new Date(value))))
+    }
+    expect(rendererRequests).toEqual([])
+
+    let blockedDownloads = 0
+    const onPrematureDownload = () => { blockedDownloads++ }
+    instructor.on('download', onPrematureDownload)
+    await instructor.route(fontUrl, route => route.abort(), { times: 1 })
+    await instructor.getByRole('button', { name: startLabel }).click()
+    await expect(instructor.getByRole('alert')).toContainText('PDF-ressursene kunne ikke lastes.')
+    expect(await (await instructor.request.get(exportUrl)).json()).toEqual(frozen)
+    await instructor.clock.install()
+    const heldFont = await holdResponse(instructor, fontUrl)
+    await instructor.getByRole('button', { name: retryLabel }).click()
+    expect((await heldFont.received).status()).toBe(200)
+    await instructor.clock.fastForward(30_000)
+    await expect(instructor.getByRole('alert')).toContainText('Ventetiden utløp. Prøv igjen.')
+    heldFont.release()
+    await download(instructor, 'instruktor.pdf', retryLabel)
+    expect(blockedDownloads).toBe(1)
+    instructor.off('download', onPrematureDownload)
+    blockedDownloads = 0
+
+    await candidate.bringToFront()
+    candidate.on('download', onPrematureDownload)
+    const pendingExport = await holdResponse(candidate, exportUrl)
+    await result.getByRole('button', { name: startLabel }).click()
+    expect((await pendingExport.received).status()).toBe(200)
+    await candidate.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    pendingExport.release()
+    await expect(candidate.getByText('Lager PDF …')).toHaveCount(0)
+    expect(blockedDownloads).toBe(0)
+    await candidate.evaluate(() => { Reflect.deleteProperty(document, 'visibilityState') })
+    failNextRenderer = true
+    const [failedRenderer] = await Promise.all([
+      candidate.waitForResponse(rendererUrl),
+      candidate.getByRole('button', { name: startLabel }).click(),
+    ])
+    expect(failedRenderer.status()).toBe(503)
+    expect(failedRenderer.headers()['cache-control']).toBe('no-store')
+    await expect(candidate.getByRole('alert')).toHaveText('PDF-koden kunne ikke lastes.')
+    const reload = candidate.getByRole('button', { name: 'Last siden på nytt' })
+    await expect(candidate.getByRole('button', { name: retryLabel })).toHaveCount(0)
+    await Promise.all([candidate.waitForEvent('framenavigated', { predicate: frame => frame === candidate.mainFrame() }), reload.click()])
+    await expect(candidate.getByRole('heading', { name: resultHeading })).toBeVisible()
+    const [reloadedRenderer] = await Promise.all([
+      candidate.waitForResponse(rendererUrl, { timeout: 15_000 }), download(candidate, 'kandidat.pdf'),
+    ])
+    expect(reloadedRenderer.status()).toBe(200)
+    expect(reloadedRenderer.url()).not.toBe(failedRenderer.url())
+    expect(blockedDownloads).toBe(1)
+    candidate.off('download', onPrematureDownload)
+    blockedDownloads = 0
+
+    await renewed.bringToFront()
+    await renewed.getByRole('button', { name: 'Logg ut' }).click()
+    await expect(renewed.getByRole('heading', { name: 'Logg inn til testkjøring' })).toBeVisible()
+    await signIn(store, renewed, candidateEmail)
+    await expect(renewed.getByRole('region', { name: resultHeading })).toBeVisible()
+    expect(await (await renewed.request.get(exportUrl)).json()).toEqual(frozen)
+    renewed.on('download', onPrematureDownload)
+    await renewed.clock.install()
+    const heldRenderer = await holdResponse(renewed, rendererUrl)
+    await renewed.getByRole('button', { name: startLabel }).click()
+    expect((await heldRenderer.received).status()).toBe(200)
+    await renewed.clock.fastForward(30_000)
+    await expect(renewed.getByRole('alert')).toContainText('Ventetiden utløp. Prøv igjen.')
+    heldRenderer.release()
+    await download(renewed, 'kandidat-ny-okt.pdf', retryLabel)
+    expect(blockedDownloads).toBe(1)
+    blockedDownloads = 0
+    if (process.env.TIDE_TEST_DRIVE_PDF_FIXTURE === '1') {
+      await writeFile(info.outputPath('testkjoring-kilde.json'), JSON.stringify(frozen, null, 2), 'utf8')
+    }
+
+    let authorizations = 0
+    await renewed.route(exportUrl, async route => {
+      if (++authorizations === 2) store.revokeCandidate(admin, run.id, Date.now(), origin)
+      await route.continue()
+    })
+    await renewed.getByRole('button', { name: startLabel }).click()
+    await expect(renewed.getByRole('alert')).toHaveText('Testkjøringen er ikke tilgjengelig for denne innloggingen.')
+    await expect(renewed.getByRole('region', { name: resultHeading })).toHaveCount(0)
+    expect(authorizations).toBe(2)
+    expect(blockedDownloads).toBe(0)
+    expect((await candidate.request.get(exportUrl)).status()).toBe(404)
+    expect(await (await instructor.request.get(exportUrl)).json()).toEqual(frozen)
+  } finally {
+    for (const release of releaseHeldResponses) release()
+    try {
+      await Promise.all(contexts.map(context => context.close()))
+    } finally {
+      try {
+        if (server?.listening) {
+          const activeServer = server
+          await new Promise<void>((resolve, reject) => activeServer.close(error => error ? reject(error) : resolve()))
+        }
+      } finally { store.database.close() }
+    }
+  }
+})
 
 test('testkjøring har egen innlogging, eksakte tildelinger og tilbakekall på tvers av nettleserøkter', async ({ browser }, info) => {
   const store = new TestDriveStore(info.outputPath('testkjoring.sqlite'))

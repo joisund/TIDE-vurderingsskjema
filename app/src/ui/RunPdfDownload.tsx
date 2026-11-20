@@ -6,6 +6,7 @@ import { AppError } from '../domain/run.ts'
 import { explain } from './app-errors.ts'
 
 type Props = { runId: string; busy: boolean; downloadRunPdf: DownloadRunPdf; report: (error: unknown) => void }
+type PdfFailure = string | { message: string; reload: () => void }
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -44,16 +45,17 @@ function technicalPdfError(error: unknown) {
   return 'PDF-en kunne ikke opprettes. Prøv igjen.'
 }
 
-export function PdfDownload({ busy, download, report, label = 'Last ned PDF', describeError = technicalPdfError }: {
+export function PdfDownload({ busy, download, report, label = 'Last ned PDF', describeError = technicalPdfError, cancelWhenHidden = false }: {
   busy: boolean
   download: (signal: AbortSignal) => Promise<{ blob: Blob; filename: string }>
   report: (error: unknown) => void
   label?: string
-  describeError?: (error: unknown) => string
+  describeError?: (error: unknown) => PdfFailure
+  cancelWhenHidden?: boolean
 }) {
   const attempt = useRef<AbortController>(undefined)
   const [generating, setGenerating] = useState(false)
-  const [failure, setFailure] = useState('')
+  const [failure, setFailure] = useState<PdfFailure>('')
   const [notice, setNotice] = useState('')
 
   useLayoutEffect(() => {
@@ -62,16 +64,19 @@ export function PdfDownload({ busy, download, report, label = 'Last ned PDF', de
 
   useLayoutEffect(() => {
     const cancel = () => attempt.current?.abort()
+    const onHidden = () => { if (document.visibilityState === 'hidden') cancel() }
     window.addEventListener('pagehide', cancel)
+    if (cancelWhenHidden) document.addEventListener('visibilitychange', onHidden)
     return () => {
       window.removeEventListener('pagehide', cancel)
+      document.removeEventListener('visibilitychange', onHidden)
       cancel()
       attempt.current = undefined
     }
-  }, [])
+  }, [cancelWhenHidden])
 
   async function startDownload() {
-    if (busy || attempt.current) return
+    if (busy || attempt.current || (cancelWhenHidden && document.visibilityState === 'hidden')) return
     const active = new AbortController()
     attempt.current = active
     setFailure('')
@@ -79,6 +84,7 @@ export function PdfDownload({ busy, download, report, label = 'Last ned PDF', de
     setGenerating(true)
     try {
       const { blob, filename } = await download(active.signal)
+      if (cancelWhenHidden && document.visibilityState === 'hidden') active.abort()
       if (active.signal.aborted) return
       downloadBlob(blob, filename)
       setNotice('PDF-filen er klar.')
@@ -96,16 +102,21 @@ export function PdfDownload({ busy, download, report, label = 'Last ned PDF', de
     }
   }
 
+  const reload = typeof failure !== 'string'
   return (
     <>
       <div className="actions">
         <button type="button" className="button primary" aria-disabled={busy || generating}
-          aria-describedby={failure ? 'run-pdf-error' : undefined} onClick={() => { void startDownload() }}>
-          {failure ? 'Prøv å laste ned PDF igjen' : label}
+          aria-describedby={failure ? 'run-pdf-error' : undefined} onClick={() => {
+            if (busy || generating) return
+            if (reload) failure.reload()
+            else void startDownload()
+          }}>
+          {reload ? 'Last siden på nytt' : failure ? 'Prøv å laste ned PDF igjen' : label}
         </button>
       </div>
       <p aria-live="polite" aria-atomic="true">{notice}</p>
-      {failure && <p className="field-error" id="run-pdf-error" role="alert">{failure}</p>}
+      {failure && <p className="field-error" id="run-pdf-error" role="alert">{reload ? failure.message : failure}</p>}
     </>
   )
 }

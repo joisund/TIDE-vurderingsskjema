@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type {
   TestDriveAssessmentAction, TestDriveCandidateAnswers, TestDriveCandidateChoice,
-  TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail,
+  TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail, TestDriveOpenDetail,
 } from '../content/test-drive-api.ts'
 import { PilotRequestError, assessmentStatus, pilotAssessmentWrite, pilotMessage, sameAssessmentFields } from './test-drive-client.ts'
 
@@ -13,10 +13,10 @@ const candidateAssessmentName: Record<TestDriveCandidatePart, string> = {
 type Draft = { revision: number; answers: TestDriveCandidateAnswers }
 
 export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefresh, onAccessDenied }: {
-  detail: Extract<TestDriveDetail, { role: 'candidate' }>
+  detail: Extract<TestDriveOpenDetail, { role: 'candidate' }>
   part: TestDriveCandidatePart
   onUpdated: (detail: TestDriveDetail) => void
-  onRefresh: () => void
+  onRefresh: (focusResult?: true) => void
   onAccessDenied: (error: unknown) => boolean
 }) {
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -38,7 +38,7 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
   const saveStatus = (
     <p className="save-status" role="status">
       {editable || locked ? assessmentStatus(assessment) :
-        part === 'after' && detail.phase !== 'closed' ? 'Åpnes når instruktøren bekrefter at kjøringen er gjennomført.' :
+        part === 'after' ? 'Åpnes når instruktøren bekrefter at kjøringen er gjennomført.' :
           'Stengt for registrering.'}
       {hasChanges && ' · Ulagrede svar'}
     </p>
@@ -147,14 +147,20 @@ export function CandidateTestDriveAssessment({ detail, part, onUpdated, onRefres
         </>
       )}
       {!editable && feedback}
-      {part === 'after' && !editable && !locked && detail.phase !== 'closed' && (
-        <button className="button secondary" type="button" onClick={onRefresh}>Oppdater status</button>
+      {part === 'after' && !editable && !locked && (
+        <button className="button secondary" type="button" onClick={() => onRefresh()}>Oppdater status</button>
       )}
       {locked && (
         <details className="field-check">
           <summary>Se svar i {actionName}en</summary>
           {answerList(assessment.answers)}
         </details>
+      )}
+      {part === 'after' && locked && (
+        <>
+          <p>Resultatet blir tilgjengelig når instruktøren har avsluttet testkjøringen.</p>
+          <button className="button secondary" type="button" onClick={() => onRefresh(true)}>Oppdater status</button>
+        </>
       )}
       {!editable && hasChanges && (
         <>

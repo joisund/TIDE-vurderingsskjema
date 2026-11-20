@@ -1,6 +1,7 @@
 import { Document, Font, Image, Page, Text, pdf } from '@react-pdf/renderer'
 import { PdfRenderingError } from '../../application/run-pdf.ts'
 import type { RenderClosurePdf, RenderLinePdf, RenderTechnicalPdf } from '../../application/run-pdf.ts'
+import type { TestDriveClosedDocument } from '../../content/test-drive-api.ts'
 import { linePdfLayoutVersion } from '../../domain/line-training.ts'
 // Originalen rendret på hvit papirflate, med samme pikselmål og uten alfakanal.
 // Da trenger ikke PDFKit å starte en ny PNG-dekodingsworker per side.
@@ -11,6 +12,7 @@ import { closureDocument, pdfFont } from './closure-document.tsx'
 import { pdfBlobFromStream } from './pdf-stream.ts'
 import { technicalDocument } from './technical-document.tsx'
 import { lineDocument } from './line-document.tsx'
+import { TestDriveDocument } from './test-drive-document.tsx'
 
 let pdfReady = false
 let preparation: { signal: AbortSignal; done: Promise<void> } | undefined
@@ -96,4 +98,10 @@ export const renderLinePdf: RenderLinePdf = async (source, signal) => {
   if (!pdfReady) throw new PdfRenderingError('PDF-skriften og de øvrige ressursene er ikke klargjort.')
   if (source.pdfLayoutVersion !== linePdfLayoutVersion) throw new PdfRenderingError('PDF-oppsettet for linjeopplæring støttes ikke.')
   return pdfBlobFromStream(() => pdf(lineDocument({ logo, source })).toBuffer(), signal)
+}
+
+export async function renderTestDrivePdf(source: TestDriveClosedDocument, signal: AbortSignal) {
+  if (!pdfReady) throw new PdfRenderingError('PDF-skriften og de øvrige ressursene er ikke klargjort.')
+  if (source.documentVersion !== 1) throw new PdfRenderingError('PDF-oppsettet for testkjøring støttes ikke.')
+  return pdfBlobFromStream(() => pdf(TestDriveDocument({ logo, source })).toBuffer(), signal)
 }

@@ -17,6 +17,8 @@ For å teste den statiske leveransen, kjør `npm run build` og deretter `npm run
 
 Kjør fra `app` med Node.js 26.13.0. Databasen opprettes i `../.cache/test-drive-pilot/data.sqlite` og gjenbrukes ved restart. Sett eventuelt `PILOT_DB` til en annen `.sqlite`-fil utenfor `dist/` i alle pilotterminalene.
 
+Kandidaten leverer før- og ettervurderingen hver for seg. Instruktøren fører sin vurdering underveis og avslutter når alle tre deler er levert. Begge tildelte roller med aktiv tilgang kan da åpne resultatet og hente samme låste dokument som PDF. Kandidattilgangen kan utløpe eller trekkes tilbake uavhengig av økten. [Fysisk prøve med fiktive identiteter](../_bmad-output/implementation-artifacts/epic-4-manuell-verifisering.md).
+
 ```powershell
 npm ci
 npm run pilot:seed
@@ -74,6 +76,8 @@ npm run build
 npm run test:browser -- test-drive.spec.ts
 ```
 
+Med `TIDE_TEST_DRIVE_PDF_FIXTURE=1` beholder nettleserprøven sluttkilden og tre nedlastede PDF-er per nettlesermotor. Kjør `python tests/pdf/verify-test-drive.py <prøvemappe>` med `pdfplumber` for å kontrollere faktisk innhold, svarkolonner og sidebrudd.
+
 ## Versjoner
 
-Build-ID er appversjonen i `package.json` med valgfri overstyring via `VITE_BUILD_ID`. IndexedDB bruker schema 1. Gjeldende kriterie-ID-er, regel- og hjelpeversjoner ligger under `src/content/` og kopieres inn i hvert løp ved oppretting. Feildiagnostikk i nettleserkonsollen viser feilkode, build og schema.
+Build-ID er appversjonen i `package.json` med valgfri overstyring via `VITE_BUILD_ID`. Fadder-, instruktør- og linjeflyt bruker IndexedDB-skjema 8. Testkjøringens SQLite-tabeller og versjonerte dokumentkilder ligger i pilotens database. Gjeldende kriterie-ID-er, regel- og hjelpeversjoner ligger under `src/content/`. Feildiagnostikk i nettleserkonsollen viser feilkode, build og schema.

@@ -7,6 +7,7 @@ import { testDriveCommentLimits, testDrivePath } from '../src/content/test-drive
 import type {
   CreateTestDrive, TestDriveAdministration, TestDriveAssessmentAction, TestDriveAssignment,
   TestDriveCandidateAssessment, TestDriveCandidatePart, TestDriveCandidateWrite, TestDriveDetail,
+  TestDriveClosedDocument,
   TestDriveInstructorAssessment, TestDriveInstructorFields, TestDriveInstructorWrite,
   TestDrivePerson, TestDrivePhase, TestDriveRole, TestDriveWorkspace,
 } from '../src/content/test-drive-api.ts'
@@ -88,6 +89,10 @@ const schema = `
     author_id TEXT NOT NULL REFERENCES pilot_people(id),
     PRIMARY KEY (drive_id, request_id), UNIQUE (drive_id, revision)
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS test_drive_closed_documents (
+    drive_id TEXT PRIMARY KEY REFERENCES test_drives(id),
+    document TEXT NOT NULL CHECK (json_type(document) = 'object')
+  ) STRICT;
   CREATE TABLE IF NOT EXISTS pilot_login_challenges (
     id TEXT PRIMARY KEY, email TEXT NOT NULL, digest TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -122,6 +127,8 @@ type RunRow = {
 }
 
 export type AuthorizedTestDrive = RunRow & { role: TestDriveRole }
+type AssignmentRow = Pick<RunRow, 'id' | 'department_id' | 'department_name' | 'candidate_id' |
+  'candidate_name' | 'instructor_name' | 'expires_at' | 'phase'>
 
 const loginCodeLifetime = 10 * 60_000
 const maxCodeAttempts = 5
@@ -137,13 +144,13 @@ function person({ id, name, email }: TestDrivePerson): TestDrivePerson {
   return { id, name, email }
 }
 
-function assignment(row: AuthorizedTestDrive): TestDriveAssignment {
+function assignment(row: AssignmentRow & { role: TestDriveRole }, document?: TestDriveClosedDocument): TestDriveAssignment {
   return {
     id: row.id,
-    department: { id: row.department_id, name: row.department_name },
+    department: document?.department ?? { id: row.department_id, name: row.department_name },
     role: row.role,
-    candidateName: row.candidate_name,
-    instructorName: row.instructor_name,
+    candidateName: document?.candidate.name ?? row.candidate_name,
+    instructorName: document?.instructor.name ?? row.instructor_name,
     expiresAt: new Date(row.expires_at).toISOString(),
     phase: row.phase,
   }
@@ -191,9 +198,9 @@ export class TestDriveStore {
     if (saved?.definition !== definition) throw new Error('En lagret malversjon kan ikke endres.')
   }
 
-  transaction<T>(work: () => SyncResult<T>): T {
+  transaction<T>(work: () => SyncResult<T>, begin: 'BEGIN' | 'BEGIN IMMEDIATE' = 'BEGIN IMMEDIATE'): T {
     if (types.isAsyncFunction(work)) throw new TypeError('SQLite-transaksjoner må være synkrone.')
-    this.database.exec('BEGIN IMMEDIATE')
+    this.database.exec(begin)
     try {
       const result = work()
       if (result != null && typeof (result as { then?: unknown }).then === 'function') {
@@ -284,15 +291,21 @@ export class TestDriveStore {
   }
 
   template(row: AuthorizedTestDrive): typeof testDriveV1 {
+    if (row.phase === 'closed') return this.exportSource(row).template
     const template = this.database.prepare('SELECT definition FROM test_drive_templates WHERE version = ?')
       .get(row.template_version)
     return JSON.parse(String(template?.definition))
   }
 
   detail(row: AuthorizedTestDrive): TestDriveDetail {
+    if (row.phase === 'closed') {
+      const document = this.exportSource(row)
+      return { ...assignment(row, document), phase: 'closed', document }
+    }
     const { version, source, headerFields, criteria, candidateChoices, instructorChoices, resultChoices } = this.template(row)
     const common = {
       ...assignment(row),
+      phase: row.phase,
       header: JSON.parse(row.header),
       template: { version, source, headerFields, criteria, candidateChoices },
     }
@@ -446,11 +459,66 @@ export class TestDriveStore {
     return this.detail({ ...run, phase: 'after' })
   }
 
+  closeRun(run: AuthorizedTestDrive, now: number) {
+    if (run.role !== 'instructor') throw new PilotError(404, 'run_unavailable')
+    if (run.phase === 'closed') return this.detail(run)
+
+    const before = this.candidateAssessment(run.id, 'before')
+    const after = this.candidateAssessment(run.id, 'after')
+    const instructor = this.instructorAssessment(run.id)
+    if (run.phase !== 'after' || !before.submittedAt || !after.submittedAt || !instructor.submittedAt ||
+      instructor.result === null) throw new PilotError(409, 'run_incomplete')
+    if (instructor.authorId !== run.instructor_id) throw new Error('Den leverte vurderingen har feil avsender.')
+
+    const document: TestDriveClosedDocument = {
+      documentVersion: 1,
+      runId: run.id,
+      department: { id: run.department_id, name: run.department_name },
+      header: JSON.parse(run.header),
+      template: this.template(run),
+      candidate: { id: run.candidate_id, name: run.candidate_name, email: run.candidate_email },
+      instructor: { id: instructor.authorId, name: run.instructor_name },
+      closedAt: new Date(now).toISOString(),
+      closedBy: run.instructor_id,
+      candidateAssessments: {
+        before: { ...before, submittedAt: before.submittedAt },
+        after: { ...after, submittedAt: after.submittedAt },
+      },
+      instructorAssessment: { ...instructor, submittedAt: instructor.submittedAt, authorId: instructor.authorId, result: instructor.result },
+    }
+    this.database.prepare('INSERT INTO test_drive_closed_documents VALUES (?, ?)').run(run.id, JSON.stringify(document))
+    this.database.prepare("UPDATE test_drives SET phase = 'closed' WHERE id = ?").run(run.id)
+    return this.detail({ ...run, phase: 'closed' })
+  }
+
+  exportSource(run: AuthorizedTestDrive): TestDriveClosedDocument {
+    if (run.phase !== 'closed') throw new PilotError(409, 'run_not_closed')
+    const source = this.database.prepare('SELECT document FROM test_drive_closed_documents WHERE drive_id = ?')
+      .get(run.id)
+    if (typeof source?.document !== 'string') throw new Error('Avsluttet testkjøring mangler dokumentkilde.')
+    return JSON.parse(source.document)
+  }
+
+  readExportSource(token: string, id: string, clock: () => number) {
+    return this.transaction(() => {
+      const now = clock()
+      const account = this.authenticate(token, now)
+      return this.exportSource(this.requireAssignment(account.id, id, now))
+    }, 'BEGIN')
+  }
+
   workspace(account: TestDrivePerson, now: number, origin: string): TestDriveWorkspace {
-    const assignments = this.database.prepare(`${runQuery}
+    const assignments = this.database.prepare(`
+      SELECT r.id, r.phase, r.expires_at, r.candidate_id,
+        coalesce(json_extract(s.document, '$.department.id'), r.department_id) AS department_id,
+        coalesce(json_extract(s.document, '$.department.name'), r.department_name) AS department_name,
+        coalesce(json_extract(s.document, '$.candidate.name'), r.candidate_name) AS candidate_name,
+        coalesce(json_extract(s.document, '$.instructor.name'), r.instructor_name) AS instructor_name
+      FROM (${runQuery}) r
+        LEFT JOIN test_drive_closed_documents s ON s.drive_id = r.id AND r.phase = 'closed'
       WHERE (r.candidate_id = ? AND r.expires_at > ? AND r.revoked_at IS NULL) OR r.instructor_id = ?
       ORDER BY r.created_at DESC, r.id
-    `).all(account.id, now, account.id) as RunRow[]
+    `).all(account.id, now, account.id) as AssignmentRow[]
     const grants = this.database.prepare(`
       SELECT d.id, d.name FROM pilot_creation_grants g JOIN pilot_departments d ON d.id = g.department_id
       WHERE g.person_id = ? ORDER BY d.name

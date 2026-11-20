@@ -1,6 +1,6 @@
 ---
 title: "Epic 4 – Testkjøring og individuell tildeling av linjeopplæring"
-status: draft
+status: review
 created: 2026-11-19
 epic: 4
 baselineCommit: c5c0e85
@@ -10,12 +10,12 @@ baselineCommit: c5c0e85
 
 Kandidaten kan gjennomføre en testkjøring med egenvurdering før og etter turen. Instruktøren kan dokumentere sin vurdering underveis, og kandidaten får innsyn i den etter avslutning. Sjåføren får grunnkursets linjer som standard og kan få øvrig linjeopplæring tildelt når det blir aktuelt.
 
-Dette er et planleggingsutkast med seks stories. Linjeendringen viderefører linjedokumentet fra Story 3.3. Testkjøring blir et eget dokument og en egen arbeidsflyt, tilgjengelig også for kandidater uten Tide-konto eller ansattnummer. Tidsbegrenset, individuell tilgang er arbeidsforslaget. Hvem som skal gi tilgang, opprette løp og tildele linjer, er en åpen beslutning.
+Epicen har seks stories. Linjeendringen viderefører linjedokumentet fra Story 3.3. Testkjøring har egen arbeidsflyt og egen lagring, med tidsbegrenset, individuell tilgang for fiktive kandidater uten Tide-konto eller ansattnummer. Tide må fastsette hvem som skal gi tilgang, opprette løp og tildele linjer ved reell bruk. [Implementeringsstatus og testgrunnlag](../implementation-artifacts/overlevering-epic-4.md).
 
 ## Grunnlag og avhengigheter
 
-- [Evalueringsskjema for testkjøring og avklart bakside](instructor-source-inventory.md#senere-egen-kjøringstype--testkjøring) gir 22 egne kriterier, før- og etterkolonnene, instruktørens kolonne og kommentarer samt instruktørens samlede resultat. Baksiden gir plass til utfyllende instruktørkommentarer.
-- [Story 3.3](story-3-3-proposal.md) gir den versjonerte linjemalen, sjåførkoblingen, bekreftelsene og PDF-historikken som Epic 4 bygger på.
+- Evalueringsskjema for testkjøring fra Teamleders verktøykasse 2018 gir 22 egne kriterier, før- og etterkolonnene, instruktørens kolonne og kommentarer samt instruktørens samlede resultat. Baksiden gir plass til utfyllende instruktørkommentarer. [Kontrollert avskrift av kildekriteriene](../implementation-artifacts/epic-4-testkjoring-teknisk-grunnlag.md#kildegrunnlag-for-malen).
+- Story 3.3, commit `c5c0e85`, gir den versjonerte linjemalen, sjåførkoblingen, bekreftelsene og PDF-historikken som Epic 4 bygger på.
 - [PRD](prds/prd-Digital%20kjørevurdering-2026-10-29/prd.md), [UX-design](ux-designs/ux-Digital%20kjørevurdering-2026-10-29/DESIGN.md), [UX-flyt](ux-designs/ux-Digital%20kjørevurdering-2026-10-29/EXPERIENCE.md) og [arkitektur](architecture/architecture-Digital%20kjørevurdering-2026-11-05/ARCHITECTURE-SPINE.md) gir eksisterende skjema-, tilgjengelighets- og historikkmønstre. Delt lagring og serverhåndhevet innsyn for testkjøring krever et eget arkitekturvedtak før implementering med reelle brukere. Valg av innlogging, driftsmiljø og Tide-underdomene hører til dette vedtaket.
 
 | Story | Brukerresultat | Avhengighet |
@@ -100,5 +100,5 @@ Som kandidat og instruktør vil jeg få tilgang til den avsluttede testkjøringe
 
 - **Tildeling og oppretting.** Opplæringsansvarlig per avdeling, stedfortreder ved behov og IT er mulige aktører foreslått av prosjekteier. Tide må avklare hvem som kan opprette løp, tildele instruktør og linjer, og gi eller trekke tilbake tilgang på tvers av avdelinger. Teknisk driftstilgang og lesetilgang til kandidatens vurdering avklares hver for seg.
 - **Tilgang under opplæring.** Avklar hvordan statusen «under opplæring» registreres, hvilken sluttdato som gjelder og hvem som korrigerer eller forlenger den. Avklar tilgang for testkjøring før ansettelse og om den samme tidsavgrensede ordningen skal dekke senere opplæringsmoduler. Beslutt om kandidaten skal kunne hente resultat eller PDF i en egen periode etter avslutning.
-- **Faser, avslutning og innsyn.** Før detaljimplementering avklarer prosjekteier og Tide hvordan etterfasen åpnes, hvem som avslutter, hvilke kandidatsvar instruktøren får se underveis, og hvilke kommentarer og dokumenter hver part får etter avslutning. Instruktørens del skal være skjermet for kandidaten frem til avslutning.
+- **Faser, avslutning og innsyn.** I piloten åpner tildelt instruktør etterfasen etter gjennomført kjøring og avslutter etter tre leverte deler. Partene ser egne faglige svar frem til avslutning. Begge får samme sluttinnsyn med aktiv tilgang. Tide fastsetter fasefullmaktene og innsynsreglene for reell bruk.
 - **Drift og oppbevaring.** Tide velger innloggingsløsning, serverlagring, driftsmiljø og eventuelt underdomene. Avklar hvilke personopplysninger skjemaet trenger, hvem som skal ha endelig dokumentasjon, og hvordan data oppbevares og slettes. Prosjektets nåværende pilot gir grunnlag for fiktive prøver.

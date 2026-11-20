@@ -19,6 +19,8 @@ const messages: Record<string, string> = {
   assessment_not_open: 'Denne delen er ikke åpen for registrering.',
   stale_revision: 'En nyere revisjon er lagret på en annen klient.',
   before_not_submitted: 'Kandidaten må levere førvurderingen først.',
+  run_incomplete: 'Alle tre vurderingene må være levert før testkjøringen kan avsluttes.',
+  run_not_closed: 'Testkjøringen må være avsluttet før PDF-en kan lastes ned.',
   sign_in_required: 'Økten er utløpt. Logg inn på nytt.',
   server_error: 'Pilotserveren kunne ikke behandle henvendelsen. Prøv igjen.',
 }

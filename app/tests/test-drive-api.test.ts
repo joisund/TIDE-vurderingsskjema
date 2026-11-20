@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync }
 import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +14,9 @@ import { pilotDatabaseFile } from '../server/pilot-config.ts'
 import { createTestDriveApi } from '../server/test-drive-api.ts'
 import { PilotError, TestDriveStore } from '../server/test-drive-store.ts'
 import { testDriveApiPath, testDriveCommentLimits } from '../src/content/test-drive-api.ts'
-import type { CreateTestDrive, TestDriveAdministration, TestDriveDetail, TestDriveWorkspace } from '../src/content/test-drive-api.ts'
+import type {
+  CreateTestDrive, TestDriveAdministration, TestDriveClosedDetail, TestDriveClosedDocument, TestDriveOpenDetail, TestDriveWorkspace,
+} from '../src/content/test-drive-api.ts'
 import { testDriveV1 } from '../src/content/test-drive.v1.ts'
 
 const bergen = 'opplaering-bergen@pilot.test'
@@ -133,7 +136,7 @@ async function open(t: TestContext) {
   }
 
   return {
-    call, callChunks, requestCode, lastCode, signIn, command, create,
+    call, callChunks, requestCode, lastCode, signIn, command, create, file,
     get store() { return store }, get now() { return now }, get origin() { return origin },
     advance(milliseconds: number) { now += milliseconds },
     async restart() { const port = Number(new URL(origin).port); await stop(); await start(port) },
@@ -362,7 +365,7 @@ test('kandidaten leverer egne før- og etterrevisjoner med tildelt fasekvitterin
   async function detail(cookie: string) {
     const response = await pilot.call(path, { cookie })
     assert.equal(response.status, 200)
-    return await response.json() as TestDriveDetail
+    return await response.json() as TestDriveOpenDetail
   }
 
   async function expectFailure(path: string, cookie: string, body: object, status: number, error: string) {
@@ -497,7 +500,7 @@ test('instruktørvurderingen har skjermet innsyn og uavhengige, idempotente revi
   async function detail(cookie: string) {
     const response = await pilot.call(path, { cookie })
     assert.equal(response.status, 200)
-    return await response.json() as TestDriveDetail
+    return await response.json() as TestDriveOpenDetail
   }
 
   async function assertShielded(afterRevision: number) {
@@ -510,7 +513,7 @@ test('instruktørvurderingen har skjermet innsyn og uavhengige, idempotente revi
     assert.doesNotMatch(JSON.stringify(view), /Skjermet prøve|Ut på tur/)
     const workspace = await pilot.call('/workspace', { cookie: candidate })
     assert.doesNotMatch(await workspace.text(), /Skjermet prøve|Ut på tur|instructorAssessment/)
-    await assertError(await pilot.call(`${path}/export-source`, { cookie: candidate }), 404, 'not_found')
+    await assertError(await pilot.call(`${path}/export-source`, { cookie: candidate }), 409, 'run_not_closed')
   }
 
   for (const cookie of [admin, candidate, otherCandidate, otherInstructor]) {
@@ -526,7 +529,7 @@ test('instruktørvurderingen har skjermet innsyn og uavhengige, idempotente revi
 
   const firstSave = await write('save', { ...draft, authorId: 'instructor-bergen-2' })
   assert.equal(firstSave.status, 200)
-  const first = await firstSave.json() as TestDriveDetail
+  const first = await firstSave.json() as TestDriveOpenDetail
   assert.equal(first.role, 'instructor')
   assert.equal(first.phase, 'driving')
   assert.deepEqual(first.template.instructorChoices, testDriveV1.instructorChoices)
@@ -596,7 +599,7 @@ test('instruktørvurderingen har skjermet innsyn og uavhengige, idempotente revi
   pilot.advance(1000)
   const submitted = await write('submit', submit)
   assert.equal(submitted.status, 200)
-  const locked = await submitted.json() as TestDriveDetail
+  const locked = await submitted.json() as TestDriveOpenDetail
   assert.equal(locked.role, 'instructor')
   assert.equal(locked.instructorAssessment.revision, 3)
   assert.equal(locked.instructorAssessment.authorId, run.instructor.id)
@@ -617,6 +620,158 @@ test('instruktørvurderingen har skjermet innsyn og uavhengige, idempotente revi
     { revision: 3, author_id: run.instructor.id },
   ])
   await assertShielded(1)
+})
+
+test('avslutning publiserer én atomisk dokumentkilde med frosne navn, kvitteringer og separat tilgang', async t => {
+  const pilot = await open(t)
+  const admin = await pilot.signIn(bergen)
+  const candidate = await pilot.signIn(candidateOne)
+  const instructor = await pilot.signIn(instructorOne)
+  const other = await pilot.signIn(instructorTwo)
+  const run = await pilot.create(admin)
+  const path = `/runs/${run.id}`
+  const fields = Object.fromEntries(testDriveV1.criteria.map(({ id }) => [id, 'ok']))
+  const close = (cookie = instructor, body = {}) => pilot.call(`${path}/close`, { cookie, body })
+  const source = (cookie: string) => pilot.call(`${path}/export-source`, { cookie })
+  const documentCount = () => pilot.store.database.prepare('SELECT count(*) AS count FROM test_drive_closed_documents').get()?.count
+
+  async function expectError(response: Response, status: number, error: string) {
+    assert.equal(response.status, status)
+    assert.deepEqual(await response.json(), { error })
+  }
+
+  async function post(action: string, cookie: string, body: object) {
+    assert.equal((await pilot.call(`${path}/${action}`, { cookie, body })).status, 200)
+    return new Date(pilot.now).toISOString()
+  }
+
+  for (const cookie of [candidate, admin, other]) await expectError(await close(cookie), 404, 'run_unavailable')
+  for (const cookie of [admin, other]) await expectError(await source(cookie), 404, 'run_unavailable')
+  for (const cookie of [candidate, instructor]) await expectError(await source(cookie), 409, 'run_not_closed')
+  await expectError(await close(instructor, { closedBy: 'admin-bergen' }), 400, 'invalid_input')
+  await expectError(await close(), 409, 'run_incomplete')
+
+  const beforeBody = { requestId: randomUUID(), revision: 0, answers: fields }
+  const beforeAt = await post('candidate/before/submit', candidate, beforeBody)
+  pilot.advance(1)
+  await post('complete-driving', instructor, {})
+  const instructorBody = {
+    requestId: randomUUID(), revision: 0, answers: { ...fields, 'td-01': 'fail' },
+    comments: { 'td-01': 'Øv på speil, «sving» og VTL § 3.' }, overallComment: 'Øvelse\nÅpen merknad.', result: 'conditional',
+  }
+  const instructorAt = await post('instructor/submit', instructor, instructorBody)
+  await expectError(await close(), 409, 'run_incomplete')
+  assert.equal(documentCount(), 0)
+  const stillShielded = await pilot.call(path, { cookie: candidate })
+  assert.doesNotMatch(await stillShielded.text(), /Øvelse|instructorAssessment|closedAt/)
+  pilot.advance(1)
+  const afterAnswers = { ...fields, 'td-01': 'improve' }
+  const afterBody = { ...beforeBody, requestId: randomUUID(), answers: afterAnswers }
+  const afterAt = await post('candidate/after/submit', candidate, afterBody)
+  pilot.advance(1)
+
+  pilot.store.database.exec(`
+    CREATE TRIGGER interrupt_close BEFORE UPDATE OF phase ON test_drives WHEN NEW.phase = 'closed'
+    BEGIN SELECT raise(ABORT, 'Simulert avbrutt avslutning'); END;
+  `)
+  await expectError(await close(), 500, 'server_error')
+  assert.equal(documentCount(), 0)
+  const interrupted = await pilot.call(path, { cookie: candidate })
+  assert.equal((await interrupted.json()).phase, 'after')
+  await expectError(await source(candidate), 409, 'run_not_closed')
+  pilot.store.database.exec('DROP TRIGGER interrupt_close')
+
+  pilot.advance(1)
+  const closedAt = new Date(pilot.now).toISOString()
+  const results = await Promise.all([close(), close()])
+  const snapshots = await Promise.all(results.map(async response => {
+    assert.equal(response.status, 200)
+    return (await response.json() as TestDriveClosedDetail).document
+  }))
+  const [document] = snapshots
+  assert.deepEqual(document, snapshots[1])
+  assert.equal(documentCount(), 1)
+  assert.equal(document.documentVersion, 1)
+  assert.equal(document.runId, run.id)
+  assert.equal(document.closedAt, closedAt)
+  assert.equal(document.closedBy, 'instructor-bergen')
+  assert.deepEqual(document.candidate, { id: 'candidate-1', name: 'Nora Eksempel', email: candidateOne })
+  assert.deepEqual(document.instructor, { id: 'instructor-bergen', name: 'Emil Eksempel' })
+  assert.deepEqual(document.department, { id: 'bergen', name: 'Bergen' })
+  assert.deepEqual(document.template, testDriveV1)
+  assert.deepEqual(document.header, { bus: 'Testbuss 7' })
+  assert.deepEqual(document.candidateAssessments, {
+    before: { revision: 1, answers: fields, submittedAt: beforeAt },
+    after: { revision: 1, answers: afterAnswers, submittedAt: afterAt },
+  })
+  const { requestId: _, revision: __, ...instructorFields } = instructorBody
+  assert.deepEqual(document.instructorAssessment, { ...instructorFields, revision: 1, authorId: document.closedBy, submittedAt: instructorAt })
+
+  pilot.store.database.exec(`
+    UPDATE pilot_people SET name = 'Omdøpt' WHERE id IN ('candidate-1', 'instructor-bergen');
+    UPDATE pilot_departments SET name = 'Omdøpt avdeling' WHERE id = 'bergen';
+    UPDATE test_drives SET header = '{"bus":"Ny buss"}';
+  `)
+  await pilot.restart()
+  const candidateNewSession = await pilot.signIn(candidateOne)
+  const changedTemplate = { ...testDriveV1, criteria: testDriveV1.criteria.slice(1) }
+  pilot.store.database.prepare('UPDATE test_drive_templates SET definition = ? WHERE version = ?')
+    .run(JSON.stringify(changedTemplate), testDriveV1.version)
+  for (const cookie of [candidateNewSession, instructor]) {
+    const view = await pilot.call(path, { cookie })
+    const closed = await view.json() as TestDriveClosedDetail
+    assert.equal(closed.phase, 'closed')
+    assert.equal(closed.candidateName, document.candidate.name)
+    assert.equal(closed.instructorName, document.instructor.name)
+    assert.deepEqual(closed.department, document.department)
+    assert.deepEqual(closed.document, document)
+    const exported = await source(cookie)
+    assert.equal(exported.status, 200)
+    assert.deepEqual(await exported.json() as TestDriveClosedDocument, document)
+
+    const workspace = await pilot.call('/workspace', { cookie })
+    assert.equal(workspace.status, 200)
+    const { assignments } = await workspace.json() as TestDriveWorkspace
+    assert.deepEqual(assignments, [{
+      id: document.runId, department: document.department, role: closed.role,
+      candidateName: document.candidate.name, instructorName: document.instructor.name,
+      expiresAt: closed.expiresAt, phase: 'closed',
+    }])
+  }
+  for (const { section, cookie, body } of [
+    { section: 'candidate/before', cookie: candidateNewSession, body: beforeBody },
+    { section: 'candidate/after', cookie: candidateNewSession, body: afterBody },
+    { section: 'instructor', cookie: instructor, body: instructorBody },
+  ]) {
+    const retry = await pilot.call(`${path}/${section}/submit`, { cookie, body })
+    assert.equal(retry.status, 200)
+    assert.deepEqual((await retry.json() as TestDriveClosedDetail).document, document)
+    for (const action of ['save', 'submit']) {
+      const write = await pilot.call(`${path}/${section}/${action}`, {
+        cookie, body: { ...body, requestId: randomUUID(), revision: 1 },
+      })
+      await expectError(write, 409, 'assessment_locked')
+    }
+  }
+  const writer = new DatabaseSync(pilot.file)
+  try {
+    writer.exec("BEGIN IMMEDIATE; UPDATE test_drives SET revoked_at = created_at, revoked_by = 'admin-bergen'")
+    const exported = await source(candidateNewSession)
+    assert.equal(exported.status, 200)
+    assert.deepEqual(await exported.json(), document)
+
+    pilot.advance(60_000)
+    await expectError(await source(candidateNewSession), 404, 'run_unavailable')
+  } finally {
+    writer.close()
+  }
+  const retry = await close()
+  assert.equal(retry.status, 200)
+  assert.deepEqual((await retry.json() as TestDriveClosedDetail).document, document)
+  await expectError(await source(candidate), 404, 'run_unavailable')
+  await expectError(await pilot.call(path, { cookie: candidateNewSession }), 404, 'run_unavailable')
+  assert.equal((await source(instructor)).status, 200)
+  assert.equal(documentCount(), 1)
 })
 
 test('instruktør-API autoriserer før og etter lesing av en kropp sendt i flere deler', async t => {
@@ -651,7 +806,7 @@ test('instruktør-API autoriserer før og etter lesing av en kropp sendt i flere
   await assertError(await pilot.callChunks(path, instructor, oversizedChunks), 413, 'body_too_large')
   const accepted = await pilot.callChunks(path, instructor, chunks)
   assert.equal(accepted.status, 200)
-  const detail = await accepted.json() as TestDriveDetail
+  const detail = await accepted.json() as TestDriveOpenDetail
   assert.equal(detail.role, 'instructor')
   assert.equal(detail.instructorAssessment.revision, 1)
   assert.deepEqual(detail.instructorAssessment.comments, input.comments)

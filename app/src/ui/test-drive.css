@@ -6,8 +6,8 @@
 .test-drive-card h3 { margin-bottom: 2px; }
 .test-drive-card .details { margin-block: 12px; }
 .test-drive-link { text-decoration: none; }
-.test-drive-criteria { margin: 8px 0; padding-inline-start: 24px; }
-.test-drive-criteria li + li { margin-top: 6px; }
+.test-drive-criteria, .test-drive-missing-parts { margin: 8px 0; padding-inline-start: 24px; }
+.test-drive-criteria li + li, .test-drive-missing-parts li + li { margin-top: 6px; }
 .test-drive-assessment { display: grid; gap: 8px; min-width: 0; }
 .test-drive-assessment h3 { margin-top: 12px; }
 .test-drive-assessment > .button { justify-self: start; }
@@ -30,6 +30,10 @@
   resize: vertical;
 }
 .test-drive-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
+.test-drive-final-criteria { display: grid; gap: 8px; margin: 0; padding-inline-start: 24px; }
+.test-drive-final-criteria li { padding-block: 8px; border-top: 1px solid var(--tide-sand); }
+.test-drive-final-criteria h5 { font-size: 1rem; margin: 0 0 8px; }
+.test-drive-final-criteria .test-drive-comment { margin-top: 8px; }
 .test-drive-footer { padding-top: 16px; margin-top: 22px; border-top: 1px solid var(--tide-sand); }
 .test-drive-footer a { display: inline-flex; min-height: 44px; align-items: center; }
 

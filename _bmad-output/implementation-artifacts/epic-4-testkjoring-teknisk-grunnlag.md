@@ -16,10 +16,11 @@ Avgrensningen her gjelder et eget, lokalt verifiserbart testmiljø med fiktive d
 - Skill engangskode fra økt og oppdragstilgang. Koden får kort utløp og begrensede forsøk. Økter bruker en tilfeldig, ugjennomsiktig cookie med `HttpOnly` og `SameSite`, samt `Secure` der HTTPS brukes. Tidsavgrensning og tilbakekall kontrolleres mot oppdraget også for etablerte økter. Innloggingsfeil skal ikke avsløre hvem som er registrert.
 - Sett `Cache-Control: no-store` på autentiserte API-svar. Håndhev betrodd origin ved nettleserskriving og bruk validerte, størrelsesbegrensede forespørsler. Utlever bare feltene den autentiserte aktøren kan se i gjeldende fase. Inkluder pilottest for at sluttinnsyn og eksport fortsatt krever gyldig tilgang etter avslutning.
 - Lokale pilotmeldinger holdes utenfor appens statiske ressurser og serveres ikke til kandidatens nettleser. Bruk adresser forbeholdt fiktive identiteter i pilotoppsettet. Endelig e-postlevering eller Tide-innlogging kobles til etter valg av identitetsløsning.
+- Avslutning lagrer én egen dokumentkilde og endrer fasen i samme SQLite-transaksjon. Frosne faglige avsendere, mal, kommentarer og tidspunkt følger kilden ved gjenåpning. En eksport har fersk tilgangskontroll før og etter lokal PDF-generering. Eksportfeil endrer ingen data. Tegn PDF-skriften mangler vises med forklarte Unicode-koder i PDF-en. Sluttvisningen og den frosne kilden beholder originaltegnene.
 
 ## Kildegrunnlag for malen
 
-Originalbildet «Evalueringsskjema for testkjøring», Teamleders verktøykasse 2018, er lest visuelt. [Kildeoversikten](../planning-artifacts/instructor-source-inventory.md#senere-egen-kjøringstype--testkjøring) viser originalbildet. Skjemaet har instruktørkommentar per kriterium og et sammenhengende kommentarfelt på baksiden. Hodefeltene omfatter kandidatnavn, mobil, e-post, instruktør, dato, avdeling, buss, nytt førerkort, YSK, førerkort, kjøreseddel, erfaring med tunge kjøretøy og om kandidaten er kjent i området. Pilotens felter avspeiler malen med fiktive verdier.
+Arbeidskopiens originalbilde «Evalueringsskjema for testkjøring», Teamleders verktøykasse 2018, er lest visuelt. Skjemaet har instruktørkommentar per kriterium og et sammenhengende kommentarfelt på baksiden. Hodefeltene omfatter kandidatnavn, mobil, e-post, instruktør, dato, avdeling, buss, nytt førerkort, YSK, førerkort, kjøreseddel, erfaring med tunge kjøretøy og om kandidaten er kjent i området. Pilotens felter avspeiler malen med fiktive verdier.
 
 | Nr. | Evalueringskriterium |
 | --- | --- |

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { testDriveCommentLimits } from '../content/test-drive-api.ts'
 import type {
-  TestDriveAssessmentAction, TestDriveDetail, TestDriveInstructorFields, TestDriveInstructorWrite,
+  TestDriveAssessmentAction, TestDriveDetail, TestDriveInstructorFields, TestDriveInstructorWrite, TestDriveOpenDetail,
 } from '../content/test-drive-api.ts'
 import { PilotRequestError, assessmentStatus, pilotAssessmentWrite, pilotMessage, sameAssessmentFields } from './test-drive-client.ts'
 
@@ -14,7 +14,7 @@ function sameAssessment(first: TestDriveInstructorFields, second: TestDriveInstr
 }
 
 export function InstructorTestDriveAssessment({ detail, onUpdated, onRefresh, onAccessDenied }: {
-  detail: Extract<TestDriveDetail, { role: 'instructor' }>
+  detail: Extract<TestDriveOpenDetail, { role: 'instructor' }>
   onUpdated: (detail: TestDriveDetail) => void
   onRefresh: () => void
   onAccessDenied: (error: unknown) => boolean
